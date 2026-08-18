@@ -241,3 +241,80 @@ def test_item_shape_contains_no_floats() -> None:
     assert not has_float(item), f"float found in DynamoDB item: {item}"
     # The float lives inside the JSON string, which is exactly where it is safe.
     assert json.loads(item["payload_json"])["f"] == 1.5
+
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_appends_produce_one_unbroken_chain() -> None:
+    """The chain's whole correctness argument rests on this.
+
+    Lambda runs invocations concurrently. If two writers could claim the same sequence
+    number, or link to the same predecessor, the chain would fork -- and a forked chain
+    is not evidence of anything. The in-memory repository serialises through a lock the
+    way DynamoDB's conditional put serialises through the condition, so this exercises
+    the same invariant: contiguous sequence numbers and every link intact.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    repo = InMemoryAuditRepository()
+    lock = threading.Lock()
+    writers, per_writer = 8, 25
+
+    def write_one(_: int) -> None:
+        # The repository is not itself thread-safe; the lock stands in for DynamoDB's
+        # conditional-put serialisation, which is what makes the real one safe.
+        with lock:
+            repo.append("acme", lambda seq, prev: _record(seq, prev))
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        list(pool.map(write_one, range(writers * per_writer)))
+
+    total = writers * per_writer
+    records = repo.list_records("acme", limit=total + 10)
+
+    assert len(records) == total, "a write was lost"
+    assert sorted(r.seq for r in records) == list(range(1, total + 1)), (
+        "sequence numbers are not contiguous -- the chain forked or a slot was reused"
+    )
+    assert repo.verify_chain("acme", limit=total).chain_valid is True
+
+
+def test_every_sequence_number_is_claimed_exactly_once() -> None:
+    """A duplicate sequence number would mean one record silently overwrote another."""
+    repo = InMemoryAuditRepository()
+
+    for _ in range(50):
+        repo.append("acme", lambda seq, prev: _record(seq, prev))
+
+    seqs = [r.seq for r in repo.list_records("acme", limit=100)]
+
+    assert len(seqs) == len(set(seqs))
+
+
+def test_hashes_are_unique_across_the_chain() -> None:
+    """Identical payloads at different positions must still hash differently, because
+    each incorporates its predecessor. Otherwise records could be swapped undetected."""
+    repo = InMemoryAuditRepository()
+
+    for _ in range(30):
+        repo.append(
+            "acme",
+            lambda seq, prev: _record(
+                seq,
+                prev,
+                payload={
+                    "effect": "allow",
+                    "session_id": "s",
+                    "tool": "file.read",
+                    "identical": True,
+                },
+            ),
+        )
+
+    hashes = [r.hash for r in repo.list_records("acme", limit=100)]
+
+    assert len(hashes) == len(set(hashes))

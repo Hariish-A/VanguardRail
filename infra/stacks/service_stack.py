@@ -215,6 +215,10 @@ class ServiceStack(Stack):
             table_name=f"guardrail-audit-{self.stage}",
             partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
+            # Expires idempotency records after 24h. Audit records carry no
+            # expires_at attribute, so TTL never touches them -- evidence must not
+            # quietly delete itself.
+            time_to_live_attribute="expires_at",
             billing_mode=dynamodb.BillingMode.PROVISIONED,
             read_capacity=5,
             write_capacity=5,

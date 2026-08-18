@@ -147,15 +147,33 @@ jobs:
           print("smoke test passed:", health)
           PY
 
-      - name: Verify the origin is not publicly reachable
+      - name: Verify the deployed edge matches the configured mode
         working-directory: infra
-        # The Function URL uses IAM auth behind CloudFront's OAC. If this ever returns
-        # 200, the origin has been exposed and the security posture is broken.
+        # With CloudFront disabled (the default -- new AWS accounts cannot create
+        # distributions without a support case) the Function URL *is* the endpoint and
+        # correctly answers 200. An earlier version of this step asserted 403, which was
+        # right only while CloudFront fronted the origin; it would have failed every run.
         run: |
+          EDGE=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['EdgeMode'])")
           FUNCTION_URL=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['FunctionUrl'])")
           STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$FUNCTION_URL/healthz")
-          echo "Direct origin call returned HTTP $STATUS"
-          if [ "$STATUS" != "403" ]; then
-            echo "FAIL: expected 403 from the raw Function URL, got $STATUS"
-            exit 1
+          echo "EdgeMode=$EDGE, direct origin call returned HTTP $STATUS"
+
+          if [ "$EDGE" = "cloudfront" ]; then
+            # OAC must make the raw origin unreachable.
+            [ "$STATUS" = "403" ] || { echo "FAIL: origin exposed despite CloudFront"; exit 1; }
+          else
+            [ "$STATUS" = "200" ] || { echo "FAIL: Function URL should serve directly"; exit 1; }
           fi
+
+      - name: Verify data endpoints reject unauthenticated callers
+        working-directory: infra
+        # The edge is deliberately public, so authentication is the control that
+        # actually protects tool-call arguments. Asserted on every deploy.
+        run: |
+          BASE=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['BaseUrl'])")
+          for path in /v1/evaluate /v1/audit; do
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$BASE$path" -d '{}' -H 'content-type: application/json')
+            echo "$path unauthenticated -> HTTP $STATUS"
+            [ "$STATUS" = "401" ] || { echo "FAIL: $path did not require authentication"; exit 1; }
+          done

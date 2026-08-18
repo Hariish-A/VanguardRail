@@ -88,6 +88,20 @@ async def evaluate_action(
     # field -- a trivial cross-tenant forgery.
     envelope = envelope.model_copy(update={"tenant_id": caller.tenant_id})
 
+    # A retried request must not produce a second decision or a second audit record
+    # for one logical action. Networks drop responses; a fail-closed SDK retries; without
+    # this the audit log would show the same delete attempted twice.
+    if envelope.idempotency_key:
+        cached = get_audit_repository().find_idempotent(
+            envelope.tenant_id, envelope.idempotency_key
+        )
+        if cached is not None:
+            logger.info(
+                "idempotent_replay",
+                extra={"idempotency_key": envelope.idempotency_key, "tool": envelope.tool},
+            )
+            return EvaluateResponse.model_validate(cached)
+
     bundle = get_bundle()
     result = evaluate(envelope, bundle)
     facts = build_facts(envelope)
@@ -139,7 +153,7 @@ async def evaluate_action(
         },
     )
 
-    return EvaluateResponse(
+    response = EvaluateResponse(
         decision=effective.wire_name,
         allowed=allowed,
         matched_rules=result.matched_rules,
@@ -154,6 +168,17 @@ async def evaluate_action(
         hitl=hitl,
         latency_ms=round(latency_ms, 3),
     )
+
+    if envelope.idempotency_key:
+        # Stored after the audit write, so a replay can only ever return a decision that
+        # was genuinely recorded. Storage failures are swallowed inside the repository:
+        # the decision already stands, and losing idempotency on one request is far less
+        # serious than rejecting a correctly evaluated action.
+        get_audit_repository().store_idempotent(
+            envelope.tenant_id, envelope.idempotency_key, response.model_dump(mode="json")
+        )
+
+    return response
 
 
 def _persist(
@@ -215,16 +240,14 @@ def _emit_metrics(result: EvaluationResult, envelope: ActionEnvelope, latency_ms
     from aws_lambda_powertools.metrics import MetricUnit, single_metric
 
     settings = get_settings()
-    effect_name = result.effect.wire_name
-    dry_run = envelope.dry_run
 
     with single_metric(
-        name="dry_run.decisions" if dry_run else "decisions",
+        name="dry_run.decisions" if envelope.dry_run else "decisions",
         unit=MetricUnit.Count,
         value=1,
         namespace=settings.service_name,
     ) as metric:
-        metric.add_dimension(name="outcome", value=effect_name)
+        metric.add_dimension(name="outcome", value=result.effect.wire_name)
 
     with single_metric(
         name="evaluate.latency_ms",

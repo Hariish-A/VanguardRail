@@ -302,3 +302,75 @@ def test_unexpected_fields_are_rejected(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Idempotency
+# ---------------------------------------------------------------------------
+
+
+def test_retry_with_the_same_idempotency_key_returns_the_original_decision(
+    client: TestClient,
+) -> None:
+    """Networks drop responses and a fail-closed SDK retries. Without idempotency the
+    audit log would show the same delete attempted twice, which is a false record of
+    what the agent did."""
+    body = {
+        "agent_id": "bot",
+        "session_id": "s",
+        "tool": "db.delete_records",
+        "arguments": {"count": 500},
+        "idempotency_key": "retry-me-123",
+    }
+
+    first = client.post("/v1/evaluate", json=body, headers={"x-api-key": API_KEY}).json()
+    second = client.post("/v1/evaluate", json=body, headers={"x-api-key": API_KEY}).json()
+
+    assert first["decision_id"] == second["decision_id"]
+    assert first["audit_seq"] == second["audit_seq"]
+    assert first["audit_hash"] == second["audit_hash"]
+
+
+def test_a_replayed_request_writes_no_second_audit_record(client: TestClient) -> None:
+    body = {
+        "agent_id": "bot",
+        "session_id": "s",
+        "tool": "file.read",
+        "arguments": {"path": "/tmp/x"},
+        "idempotency_key": "only-once",
+    }
+
+    for _ in range(4):
+        client.post("/v1/evaluate", json=body, headers={"x-api-key": API_KEY})
+
+    listing = client.get("/v1/audit", headers={"x-api-key": API_KEY}).json()
+
+    assert listing["count"] == 1
+
+
+def test_different_idempotency_keys_are_independent(client: TestClient) -> None:
+    for key in ("a", "b", "c"):
+        client.post(
+            "/v1/evaluate",
+            json={
+                "agent_id": "bot",
+                "session_id": "s",
+                "tool": "file.read",
+                "arguments": {"path": "/tmp/x"},
+                "idempotency_key": key,
+            },
+            headers={"x-api-key": API_KEY},
+        )
+
+    assert client.get("/v1/audit", headers={"x-api-key": API_KEY}).json()["count"] == 3
+
+
+def test_requests_without_an_idempotency_key_are_never_deduplicated(
+    client: TestClient,
+) -> None:
+    """Two genuinely separate identical actions must both be recorded. Deduplicating
+    them would hide real agent behaviour."""
+    for _ in range(3):
+        _evaluate(client, "file.read", {"path": "/tmp/x"})
+
+    assert client.get("/v1/audit", headers={"x-api-key": API_KEY}).json()["count"] == 3

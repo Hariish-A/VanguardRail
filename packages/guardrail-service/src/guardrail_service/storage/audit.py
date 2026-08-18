@@ -58,6 +58,13 @@ GENESIS_HASH = "0" * 64
 MAX_WRITE_ATTEMPTS = 6
 """Bounded retries on sequence contention before failing closed."""
 
+IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+"""How long a decision is remembered against its idempotency key.
+
+The purpose is making SDK retries safe, and a retry arrives within seconds. A day is
+generous; keeping these forever would grow the table for no benefit.
+"""
+
 
 class AuditWriteError(RuntimeError):
     """The audit record could not be persisted, so no decision may be returned."""
@@ -309,6 +316,10 @@ class AuditRepository(Protocol):
 
     def verify_chain(self, tenant_id: str, *, limit: int = 1000) -> ChainVerification: ...
 
+    def find_idempotent(self, tenant_id: str, key: str) -> dict[str, Any] | None: ...
+
+    def store_idempotent(self, tenant_id: str, key: str, response: dict[str, Any]) -> None: ...
+
 
 class InMemoryAuditRepository:
     """Reference implementation used by tests and local development.
@@ -319,6 +330,7 @@ class InMemoryAuditRepository:
 
     def __init__(self) -> None:
         self._records: dict[str, list[AuditRecord]] = {}
+        self._idempotent: dict[tuple[str, str], dict[str, Any]] = {}
 
     def append(self, tenant_id: str, build: RecordBuilder) -> AuditRecord:
         chain = self._records.setdefault(tenant_id, [])
@@ -339,6 +351,12 @@ class InMemoryAuditRepository:
 
     def verify_chain(self, tenant_id: str, *, limit: int = 1000) -> ChainVerification:
         return verify_records(self._records.get(tenant_id, [])[:limit])
+
+    def find_idempotent(self, tenant_id: str, key: str) -> dict[str, Any] | None:
+        return self._idempotent.get((tenant_id, key))
+
+    def store_idempotent(self, tenant_id: str, key: str, response: dict[str, Any]) -> None:
+        self._idempotent.setdefault((tenant_id, key), response)
 
 
 class DynamoDBAuditRepository:
@@ -469,6 +487,57 @@ class DynamoDBAuditRepository:
             )
 
         return [AuditRecord.from_item(self._deserialize(i)) for i in response.get("Items", [])]
+
+    # -- idempotency ---------------------------------------------------
+    def find_idempotent(self, tenant_id: str, key: str) -> dict[str, Any] | None:
+        """Return a previously stored response for this key, if any.
+
+        Scoped to the tenant, so one tenant's key can never surface another's decision.
+        """
+        response = self.client.get_item(
+            TableName=self._table_name,
+            Key={"pk": {"S": f"TENANT#{tenant_id}"}, "sk": {"S": f"IDEM#{key}"}},
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        if not item:
+            return None
+        stored: dict[str, Any] = json.loads(self._deserialize(item)["response_json"])
+        return stored
+
+    def store_idempotent(self, tenant_id: str, key: str, response: dict[str, Any]) -> None:
+        """Remember a decision against its idempotency key.
+
+        Written conditionally, so a concurrent duplicate does not overwrite the first
+        answer -- whichever request landed first is the one that stands.
+
+        Expires after IDEMPOTENCY_TTL_SECONDS via DynamoDB TTL. The key exists to make
+        *retries* safe, and a retry arrives within seconds; keeping these forever would
+        grow the table without bound for no benefit.
+
+        A failure here is logged, not raised: the decision has already been recorded in
+        the chain, and losing idempotency on one request is far less serious than failing
+        a request whose action was correctly evaluated.
+        """
+        from botocore.exceptions import ClientError
+
+        expires_at = int(time.time()) + IDEMPOTENCY_TTL_SECONDS
+        try:
+            self.client.put_item(
+                TableName=self._table_name,
+                Item=self._serialize(
+                    {
+                        "pk": f"TENANT#{tenant_id}",
+                        "sk": f"IDEM#{key}",
+                        "response_json": json.dumps(response, separators=(",", ":")),
+                        "expires_at": expires_at,
+                    }
+                ),
+                ConditionExpression="attribute_not_exists(sk)",
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
 
     def verify_chain(self, tenant_id: str, *, limit: int = 1000) -> ChainVerification:
         """Walk the chain oldest-first and check every link."""
