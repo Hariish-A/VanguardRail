@@ -1,0 +1,40 @@
+# Secrets & local config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+aws-credentials*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# CDK
+infra/cdk.out/
+infra/.cdk.staging/
+cdk.out/
+
+# Node (console, M3)
+node_modules/
+apps/console/dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local artifacts
+*.log
+.dynamodb/

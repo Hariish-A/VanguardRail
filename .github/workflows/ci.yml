@@ -1,0 +1,161 @@
+name: CI
+
+# Quality gates run on every push. Deployment runs only on main, and only after the
+# gates pass -- including the cost scan, which is what keeps the $0 commitment real
+# rather than aspirational.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Cancel superseded runs on a branch, but never cancel a deploy midway.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  UV_VERSION: "0.5.11"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, types, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy packages
+
+      - name: Unit tests
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  cost-gate:
+    name: Cost gate (no paid AWS resources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --all-extras --frozen
+
+      - name: Synthesize CloudFormation
+        working-directory: infra
+        # Bundling is skipped here on purpose: this job inspects resource *types*, and
+        # skipping the Docker build makes the gate fast. The deploy job below does a
+        # real bundled synth.
+        env:
+          GUARDRAIL_SKIP_BUNDLING: "1"
+          GUARDRAIL_STAGE: dev
+          CDK_DEFAULT_ACCOUNT: "000000000000"
+          CDK_DEFAULT_REGION: us-east-1
+        run: uv run python app.py
+
+      - name: Scan for paid resources
+        run: uv run python scripts/check_banned_resources.py infra/cdk.out
+
+  deploy:
+    name: Deploy to dev
+    needs: [quality, cost-gate]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write # required for OIDC; no long-lived AWS keys exist anywhere
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --all-extras --frozen
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: guardrail-ci-${{ github.run_id }}
+
+      - name: Install CDK CLI
+        run: npm install --global aws-cdk@2
+
+      - name: Deploy
+        working-directory: infra
+        env:
+          GUARDRAIL_STAGE: dev
+          GUARDRAIL_VERSION: ${{ github.sha }}
+          GUARDRAIL_ALERT_EMAIL: ${{ secrets.GUARDRAIL_ALERT_EMAIL }}
+        run: cdk deploy --all --require-approval never --outputs-file outputs.json
+
+      - name: Smoke test the deployment
+        working-directory: infra
+        # The deploy is not "done" until the live URL answers correctly with the SHA
+        # that was just built. CloudFront needs a moment to propagate the new origin.
+        run: |
+          BASE_URL=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['BaseUrl'])")
+          echo "Base URL: $BASE_URL"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 15 "$BASE_URL/healthz" > health.json; then
+              cat health.json
+              break
+            fi
+            echo "attempt $attempt failed; waiting for CloudFront propagation"
+            sleep 20
+          done
+          python - <<'PY'
+          import json, sys
+          health = json.load(open("health.json"))
+          expected = "${{ github.sha }}"
+          assert health["status"] == "ok", health
+          assert health["version"] == expected, f"deployed {health['version']}, expected {expected}"
+          print("smoke test passed:", health)
+          PY
+
+      - name: Verify the origin is not publicly reachable
+        working-directory: infra
+        # The Function URL uses IAM auth behind CloudFront's OAC. If this ever returns
+        # 200, the origin has been exposed and the security posture is broken.
+        run: |
+          FUNCTION_URL=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['FunctionUrl'])")
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$FUNCTION_URL/healthz")
+          echo "Direct origin call returned HTTP $STATUS"
+          if [ "$STATUS" != "403" ]; then
+            echo "FAIL: expected 403 from the raw Function URL, got $STATUS"
+            exit 1
+          fi
