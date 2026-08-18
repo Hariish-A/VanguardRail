@@ -43,27 +43,53 @@ RUNTIME_DEPENDENCIES = [
     "aws-lambda-powertools>=3.0",
 ]
 
-# Build steps for the dependency layer, run inside the official Lambda arm64 image so
-# compiled wheels (pydantic-core above all) match the runtime platform exactly.
+# Bundling scripts, run inside the official Lambda arm64 image so compiled wheels
+# (pydantic-core above all) match the runtime platform exactly. Verified: the layer
+# yields _pydantic_core.cpython-312-aarch64-linux-gnu.so, not an x86 build.
 #
-# Each requirement is single-quoted: unquoted `>=` is a shell redirect, so
-# `pip install fastapi>=0.115` silently installs the wrong thing and writes a file
-# named `=0.115`.
-_LAYER_BUILD = [
-    "pip install --quiet --upgrade pip",
-    "pip install --quiet "
-    + " ".join(f"'{dep}'" for dep in RUNTIME_DEPENDENCIES)
-    + " --target /asset-output/python",
-    "find /asset-output -name __pycache__ -type d -prune -exec rm -rf {} + || true",
-    "find /asset-output -name tests -type d -prune -exec rm -rf {} + || true",
-]
+# Three things here are load-bearing, each learned from a failure:
+#
+# 1. `set -euo pipefail`, and cleanup steps on their own lines. The original joined
+#    every step with ` && ` and ended with `|| true`. Because `&&` and `||` are
+#    left-associative with equal precedence, a failure in the FIRST command fell
+#    through to the trailing `|| true` and the whole script exited 0 with an empty
+#    output directory -- surfacing much later as an opaque "BundlingProducedNoOutput".
+#    A build script must fail loudly at the step that broke.
+#
+# 2. No `pip install --upgrade pip`. CDK runs the bundling container as uid 1000, so
+#    that step dies with "Permission denied: '/.local'" -- which is exactly what the
+#    masked failure above was hiding. The image's pip is fine as shipped.
+#
+# 3. Every requirement is single-quoted. Unquoted `>=` is a shell redirect, so
+#    `pip install fastapi>=0.115` installs an unpinned fastapi and writes a junk file
+#    named `=0.115`.
+#
+# The explicit emptiness check at the end converts CDK's generic bundling error into a
+# message that names the actual problem.
+_LAYER_BUILD = f"""
+set -euo pipefail
+export HOME=/tmp
+pip install --no-cache-dir {" ".join(f"'{dep}'" for dep in RUNTIME_DEPENDENCIES)} \
+    --target /asset-output/python
+find /asset-output -name __pycache__ -type d -prune -exec rm -rf {{}} + 2>/dev/null || true
+find /asset-output -name tests -type d -prune -exec rm -rf {{}} + 2>/dev/null || true
+test -n "$(ls -A /asset-output/python 2>/dev/null)" || {{
+    echo "ERROR: dependency layer build produced no output" >&2
+    exit 1
+}}
+"""
 
-# Build steps for the function itself: our own first-party packages, nothing more.
-_CODE_BUILD = [
-    "cp -r guardrail-core/src/guardrail_core /asset-output/",
-    "cp -r guardrail-service/src/guardrail_service /asset-output/",
-    "find /asset-output -name __pycache__ -type d -prune -exec rm -rf {} + || true",
-]
+# The function itself: our own first-party packages, nothing more.
+_CODE_BUILD = """
+set -euo pipefail
+cp -r guardrail-core/src/guardrail_core /asset-output/
+cp -r guardrail-service/src/guardrail_service /asset-output/
+find /asset-output -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+test -f /asset-output/guardrail_service/handler.py || {
+    echo "ERROR: function build did not produce handler.py" >&2
+    exit 1
+}
+"""
 
 # Set to skip Docker-based bundling so `cdk synth` works without a running Docker
 # daemon. Synth-only: the resulting asset is a placeholder, never deployable.
@@ -116,7 +142,7 @@ class ServiceStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-    def _code(self, commands: list[str]) -> lambda_.Code:
+    def _code(self, script: str) -> lambda_.Code:
         """Build a Lambda asset inside the Lambda arm64 image.
 
         When GUARDRAIL_SKIP_BUNDLING is set, a placeholder asset is used instead. That
@@ -134,7 +160,7 @@ class ServiceStack(Stack):
             bundling=cdk.BundlingOptions(
                 image=lambda_.Runtime.PYTHON_3_12.bundling_image,
                 platform="linux/arm64",
-                command=["bash", "-c", " && ".join(commands)],
+                command=["bash", "-c", script],
             ),
         )
 
