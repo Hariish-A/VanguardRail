@@ -1,5 +1,6 @@
 {
-  "app": "python app.py",
+  "_comment_app": "Run through uv so the CDK CLI uses the workspace venv. A bare `python app.py` picks up the system interpreter, which has no aws_cdk installed.",
+  "app": "uv run python app.py",
   "watch": {
     "include": ["**"],
     "exclude": ["README.md", "cdk*.json", "**/__pycache__", "cdk.out"]

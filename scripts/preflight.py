@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 REQUIRED_REGION = "us-east-1"
@@ -62,18 +63,63 @@ def _run(command: list[str], timeout: int = 30) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+# Default install locations, checked when a tool is absent from PATH. Windows applies
+# PATH changes only to newly launched processes, so a tool installed minutes ago looks
+# missing in an already-open terminal. Distinguishing "not installed" from "installed
+# but this shell predates it" turns a dead-end FAIL into a one-line fix.
+_FALLBACK_DIRS: dict[str, list[str]] = {
+    "aws": [r"%LOCALAPPDATA%\AWSCLIV2\Amazon\AWSCLIV2"],
+    "cdk": [r"%APPDATA%\npm"],
+}
+
+
+def find_tool(name: str) -> tuple[str | None, bool]:
+    """Locate an executable.
+
+    Returns (path, on_path). `on_path` is False when the tool exists in a known install
+    directory but this process's PATH cannot see it.
+    """
+    if found := shutil.which(name):
+        return found, True
+
+    for raw in _FALLBACK_DIRS.get(name, []):
+        directory = Path(os.path.expandvars(raw))
+        if not directory.is_dir():
+            continue
+        for suffix in (".cmd", ".exe", ""):
+            candidate = directory / f"{name}{suffix}"
+            if candidate.is_file():
+                return str(candidate), False
+
+    return None, False
+
+
+def _stale_path_fix(name: str) -> str:
+    return (
+        f"{name} IS installed, but this terminal's PATH predates the install. "
+        "Close it and open a NEW terminal -- Windows applies PATH changes only to "
+        "newly launched processes."
+    )
+
+
 def check_aws_cli() -> Result:
     """The AWS CLI is optional for CDK but makes verification far easier."""
-    exe = shutil.which("aws")
-    if not exe:
+    path, on_path = find_tool("aws")
+
+    if path and not on_path:
+        return Result(
+            "AWS CLI", "warn", "installed, not on this shell's PATH", _stale_path_fix("aws")
+        )
+    if not path:
         return Result(
             "AWS CLI",
             "warn",
-            "not on PATH",
+            "not found",
             "Optional. CDK reads ~/.aws directly. Install from "
             "https://awscli.amazonaws.com/AWSCLIV2.msi if you want `aws` commands.",
         )
-    code, out = _run(["aws", "--version"])
+
+    code, out = _run([path, "--version"])
     if code != 0:
         return Result("AWS CLI", "warn", out[:120], "Reinstall the AWS CLI.")
     return Result("AWS CLI", "ok", out.split()[0])
@@ -81,14 +127,16 @@ def check_aws_cli() -> Result:
 
 def check_cdk_cli() -> Result:
     """Required: the CDK CLI performs bootstrap and deploy."""
-    if not shutil.which("cdk"):
+    path, on_path = find_tool("cdk")
+
+    if path and not on_path:
         return Result(
-            "CDK CLI",
-            "fail",
-            "not on PATH",
-            "npm install --global aws-cdk@2",
+            "CDK CLI", "warn", "installed, not on this shell's PATH", _stale_path_fix("cdk")
         )
-    code, out = _run(["cdk", "--version"])
+    if not path:
+        return Result("CDK CLI", "fail", "not found", "npm install --global aws-cdk@2")
+
+    code, out = _run([path, "--version"])
     if code != 0:
         return Result("CDK CLI", "fail", out[:120], "npm install --global aws-cdk@2")
     return Result("CDK CLI", "ok", out.split()[0])
