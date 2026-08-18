@@ -38,3 +38,8 @@ Thumbs.db
 # Local artifacts
 *.log
 .dynamodb/
+
+# Local project documentation
+/urls.md
+/Project Documentation.md
+/PROGRESS.md
