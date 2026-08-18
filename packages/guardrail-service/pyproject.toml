@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "aws-lambda-powertools>=3.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

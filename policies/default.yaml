@@ -1,0 +1,143 @@
+# Guardrail default policy bundle.
+#
+# The three rules the problem statement names, plus a small set that demonstrates the
+# model. Rules are order-independent: every enabled rule is evaluated and the strictest
+# matching effect wins, so moving a rule up or down cannot change an outcome.
+
+apiVersion: guardrail/v1
+
+metadata:
+  bundle_id: default
+  version: 1
+  description: Baseline action policy for governed agents.
+  mode: enforce
+
+defaults:
+  # Default-permit: this guardrail is layered over agents that already work, so an
+  # unmatched action proceeds. Set to `block` for a default-deny posture.
+  effect: allow
+  resolution: most_restrictive
+
+rules:
+  # --- The three rules named in the problem statement -----------------------
+
+  - id: db-bulk-delete
+    description: Block destructive deletes whose blast radius exceeds the threshold.
+    severity: critical
+    match:
+      tool: db.delete_records
+      all:
+        - path: derived.record_count
+          op: gt
+          value: 100
+    effect: block
+    message: >-
+      Blocked: this would delete {derived.record_count} records, above the limit of 100.
+      Narrow the selection or request an exception.
+
+  - id: external-email-review
+    description: Require human review before any message leaves the organisation.
+    severity: high
+    match:
+      tool: email.send
+      any:
+        - path: derived.recipient_domains
+          op: any_not_in
+          value:
+            - acme-corp.com
+    effect: require_hitl
+    hitl:
+      timeout_seconds: 900
+      on_timeout: deny
+      reviewers:
+        - security-oncall
+    message: >-
+      Held for review: this message reaches external recipients
+      ({derived.recipient_domains}).
+
+  - id: confidential-read-audit
+    description: Permit reads of confidential paths, but record every one.
+    severity: low
+    match:
+      tool: file.read
+      all:
+        - path: args.path
+          op: icontains
+          value: confidential
+    effect: log_and_allow
+    message: "Confidential path accessed: {derived.path}"
+
+  # --- Additional rules demonstrating the model ----------------------------
+
+  - id: destructive-tool-in-production
+    description: >-
+      Any destructive tool aimed at production needs a human. `db.*` covers delete,
+      truncate, and drop without enumerating them individually.
+    severity: critical
+    match:
+      tool: db.*
+      all:
+        - path: context.environment
+          op: eq
+          value: production
+        - path: derived.record_count
+          op: gt
+          value: 0
+    effect: require_hitl
+    hitl:
+      timeout_seconds: 1800
+      on_timeout: deny
+    message: "Held for review: destructive database operation against production."
+
+  - id: mass-email
+    description: Large recipient lists are a data-exfiltration signal.
+    severity: high
+    match:
+      tool: email.send
+      all:
+        - path: derived.recipient_count
+          op: gt
+          value: 50
+    effect: require_hitl
+    hitl:
+      timeout_seconds: 900
+      on_timeout: deny
+    message: "Held for review: message addressed to {derived.recipient_count} recipients."
+
+  - id: payments-refund-limit
+    description: Refunds above the threshold require a human.
+    severity: critical
+    match:
+      tool: payments.refund
+      all:
+        - path: args.amount
+          op: gt
+          value: 1000
+    effect: require_hitl
+    hitl:
+      timeout_seconds: 3600
+      on_timeout: deny
+    message: "Held for review: refund of {args.amount} exceeds the 1000 auto-approval limit."
+
+  - id: credentials-path-block
+    description: >-
+      Secrets must never be read through a general-purpose file tool, whatever the
+      agent's stated intent.
+    severity: critical
+    match:
+      tool: file.*
+      any:
+        - path: args.path
+          op: icontains
+          value: /.ssh/
+        - path: args.path
+          op: icontains
+          value: .env
+        - path: args.path
+          op: icontains
+          value: id_rsa
+        - path: args.path
+          op: icontains
+          value: credentials
+    effect: block
+    message: "Blocked: {derived.path} looks like a credential store."

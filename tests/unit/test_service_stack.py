@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -136,40 +137,60 @@ def _data_paths() -> list[str]:
     )
 
 
-def test_every_data_endpoint_is_authenticated() -> None:
-    """The tripwire: the edge is a public URL, so auth must live in the application.
+def test_data_paths_discovery_is_not_silently_empty() -> None:
+    """Guards the guard.
 
-    Since the origin is deliberately reachable, "is it authenticated?" is the only
-    control that matters. This fails the build the moment a route appears that neither
-    is explicitly public nor declares an auth dependency -- turning a silent security
-    regression into a red build.
-
-    Skips only while the API is health-only, which is true through M0.
+    The authentication test below iterates documented non-public paths. If that list
+    were ever empty it would skip while every endpoint sat wide open, so assert the
+    discovery mechanism actually sees the API.
     """
-    paths = _data_paths()
-    if not paths:
-        pytest.skip("API is still health-only; there is nothing yet to authenticate")
-
     from guardrail_service.app import app
 
-    unprotected = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path is None or path.startswith(PUBLIC_PATH_PREFIXES):
-            continue
-        # An authenticated route carries at least one security dependency, registered
-        # either on the route or on its router.
-        dependant = getattr(route, "dependant", None)
-        has_auth = bool(dependant and dependant.security_requirements)
-        if not has_auth:
-            unprotected.append(path)
+    documented = set(app.openapi()["paths"])
+
+    assert "/healthz" in documented, f"path discovery is broken; found {documented}"
+    assert "/v1/evaluate" in documented, (
+        "the evaluate endpoint is missing from the OpenAPI schema, so the "
+        f"authentication tripwire would skip. Found: {sorted(documented)}"
+    )
+
+
+def test_every_data_endpoint_rejects_unauthenticated_requests() -> None:
+    """The tripwire: the edge is a public URL, so auth must live in the application.
+
+    Deliberately behavioural rather than introspective. An earlier version walked
+    `app.routes` looking for security dependencies and found nothing at all, because
+    FastAPI wraps included routers in a private container whose `path` is None -- so it
+    passed vacuously while /v1/evaluate sat fully exposed. Sending real requests tests
+    the property that actually matters and cannot drift with FastAPI internals.
+    """
+    from fastapi.testclient import TestClient
+    from guardrail_service.app import app
+
+    paths = _data_paths()
+    assert paths, "no non-public paths found; the tripwire would be vacuous"
+
+    client = TestClient(app)
+    spec = app.openapi()["paths"]
+    unprotected: list[str] = []
+
+    for path in paths:
+        for method in spec[path]:
+            if method.lower() not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            # Path parameters get a placeholder so the request reaches the handler
+            # instead of 404-ing before authentication is ever consulted.
+            concrete = re.sub(r"\{[^}]+\}", "test-id", path)
+            response = client.request(method.upper(), concrete, json={})
+
+            if response.status_code != 401:
+                unprotected.append(f"{method.upper()} {path} -> {response.status_code}")
 
     assert not unprotected, (
-        f"These routes are publicly reachable with no authentication: {unprotected}. "
-        "The Lambda Function URL is intentionally public, so every non-health route "
-        "must declare an auth dependency (Cognito JWT for console users, hashed API key "
-        "for agents). Add one, or list the route in PUBLIC_PATH_PREFIXES if it is "
-        "genuinely meant to be open."
+        f"These endpoints did not reject an unauthenticated request: {unprotected}. "
+        "The Lambda Function URL is intentionally public, so every non-health route must "
+        "require an API key. Add the require_api_key dependency, or list the route in "
+        "PUBLIC_PATH_PREFIXES if it is genuinely meant to be open."
     )
 
 

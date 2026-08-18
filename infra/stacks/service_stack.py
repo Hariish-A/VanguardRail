@@ -29,6 +29,7 @@ import aws_cdk as cdk
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
+from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
@@ -41,6 +42,8 @@ RUNTIME_DEPENDENCIES = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "aws-lambda-powertools>=3.0",
+    # The policy bundle is YAML, parsed with safe_load at cold start.
+    "pyyaml>=6.0",
 ]
 
 # Bundling scripts, run inside the official Lambda arm64 image so compiled wheels
@@ -153,7 +156,19 @@ class ServiceStack(Stack):
         self.stage = stage
 
         log_group = self._create_log_group()
+        self.audit_table = self._create_audit_table()
         self.function = self._create_function(stage=stage, version=version, log_group=log_group)
+
+        # Least privilege: the service appends and reads audit records, and must not be
+        # able to delete them. A governance system whose own role can erase its evidence
+        # provides much weaker assurance than one that cannot.
+        self.audit_table.grant(
+            self.function,
+            "dynamodb:PutItem",
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+        )
+
         self.function_url = self._create_function_url(self.function)
 
         self.distribution: cloudfront.Distribution | None = None
@@ -182,6 +197,54 @@ class ServiceStack(Stack):
             retention=logs.RetentionDays.ONE_WEEK,
             removal_policy=RemovalPolicy.DESTROY,
         )
+
+    def _create_audit_table(self) -> dynamodb.Table:
+        """The tamper-evident audit log.
+
+        **Provisioned, never on-demand.** The DynamoDB free tier covers 25 GB of storage
+        plus 25 WCU / 25 RCU of *provisioned* capacity; on-demand has no free tier at all
+        and bills from the first request. Autoscaling is deliberately off, so a traffic
+        spike throttles rather than silently generating a bill.
+
+        Two indexes, and only two -- every GSI multiplies the write capacity each record
+        consumes, so a third would push a single evaluation past the free allowance.
+        """
+        table = dynamodb.Table(
+            self,
+            "AuditTable",
+            table_name=f"guardrail-audit-{self.stage}",
+            partition_key=dynamodb.Attribute(name="pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="sk", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PROVISIONED,
+            read_capacity=5,
+            write_capacity=5,
+            # Point-in-time recovery is free to enable and is the only defence against
+            # an accidental table-level delete, which the hash chain cannot detect.
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True
+            ),
+            removal_policy=RemovalPolicy.RETAIN if self.stage == "prod" else RemovalPolicy.DESTROY,
+        )
+
+        # "Everything blocked this week."
+        table.add_global_secondary_index(
+            index_name="outcome-index",
+            partition_key=dynamodb.Attribute(name="gsi1pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="gsi1sk", type=dynamodb.AttributeType.STRING),
+            read_capacity=5,
+            write_capacity=5,
+        )
+
+        # "Everything this agent run did."
+        table.add_global_secondary_index(
+            index_name="session-index",
+            partition_key=dynamodb.Attribute(name="gsi2pk", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="gsi2sk", type=dynamodb.AttributeType.STRING),
+            read_capacity=5,
+            write_capacity=5,
+        )
+
+        return table
 
     def _code(self, script: str) -> lambda_.Code:
         """Build a Lambda asset inside the Lambda arm64 image.
@@ -243,6 +306,10 @@ class ServiceStack(Stack):
             timeout=Duration.seconds(10),
             log_group=log_group,
             environment={
+                "GUARDRAIL_AUDIT_TABLE_NAME": self.audit_table.table_name,
+                # Hashes only -- a leaked value discloses no usable credential.
+                # M5 moves this to a DynamoDB table for rotation without redeploy.
+                "GUARDRAIL_API_KEYS_JSON": os.environ.get("GUARDRAIL_API_KEYS_JSON", "{}"),
                 "GUARDRAIL_STAGE": stage,
                 "GUARDRAIL_VERSION": version,
                 "GUARDRAIL_LOG_LEVEL": "INFO" if stage == "prod" else "DEBUG",
@@ -362,6 +429,12 @@ class ServiceStack(Stack):
                 "Lambda origin URL. With CloudFront it returns 403 to direct callers, "
                 "which is intended."
             ),
+        )
+        cdk.CfnOutput(
+            self,
+            "AuditTableName",
+            value=self.audit_table.table_name,
+            description="DynamoDB table holding the hash-chained audit log.",
         )
         cdk.CfnOutput(
             self,
