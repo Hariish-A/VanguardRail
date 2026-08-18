@@ -1,0 +1,8 @@
+{
+  "Guardrail-Service-dev": {
+    "FunctionName": "guardrail-service-dev",
+    "FunctionUrl": "https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws/",
+    "EdgeMode": "function-url-direct",
+    "BaseUrl": "https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws/"
+  }
+}

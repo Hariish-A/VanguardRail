@@ -56,8 +56,11 @@ def _run(command: list[str], timeout: int = 30) -> tuple[int, str]:
             timeout=timeout,
             check=False,
         )
-    except FileNotFoundError:
-        return 127, "not found"
+    except OSError as exc:
+        # Covers FileNotFoundError and WinError 193 ("not a valid Win32 application"),
+        # which fires when a Unix-style extensionless launcher script is executed
+        # directly on Windows. A preflight check must never crash the preflight run.
+        return 126, f"could not execute: {exc}"
     except subprocess.TimeoutExpired:
         return 124, "timed out"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
@@ -73,6 +76,27 @@ _FALLBACK_DIRS: dict[str, list[str]] = {
 }
 
 
+def _prefer_windows_launcher(path: str) -> str:
+    """Swap an extensionless launcher for its .cmd/.exe sibling on Windows.
+
+    npm installs three launchers side by side: `cdk` (a Unix shell script), `cdk.cmd`,
+    and `cdk.ps1`. `shutil.which` can return the extensionless one, and running that
+    directly raises WinError 193 -- so resolve to something Windows can actually exec.
+    """
+    if os.name != "nt":
+        return path
+
+    candidate = Path(path)
+    if candidate.suffix:
+        return path
+
+    for suffix in (".cmd", ".exe", ".bat"):
+        sibling = candidate.with_name(candidate.name + suffix)
+        if sibling.is_file():
+            return str(sibling)
+    return path
+
+
 def find_tool(name: str) -> tuple[str | None, bool]:
     """Locate an executable.
 
@@ -80,7 +104,7 @@ def find_tool(name: str) -> tuple[str | None, bool]:
     directory but this process's PATH cannot see it.
     """
     if found := shutil.which(name):
-        return found, True
+        return _prefer_windows_launcher(found), True
 
     for raw in _FALLBACK_DIRS.get(name, []):
         directory = Path(os.path.expandvars(raw))

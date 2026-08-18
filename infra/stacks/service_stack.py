@@ -97,6 +97,27 @@ SKIP_BUNDLING = os.environ.get("GUARDRAIL_SKIP_BUNDLING", "").lower() in {"1", "
 
 PLACEHOLDER_ASSET = Path(__file__).parent.parent / "placeholder"
 
+# CloudFront is the intended front door: it hides the origin behind an Origin Access
+# Control and lets the console and API share one domain from M3 onward.
+#
+# Brand-new AWS accounts cannot create distributions at all -- CloudFront returns
+# "Your account must be verified before you can add new CloudFront resources", which
+# needs a (free) AWS Support case and typically 24-48 hours. Rather than block the
+# entire milestone on that queue, this flag deploys the Lambda behind a direct Function
+# URL so the service is genuinely live and verifiable today.
+#
+# The trade-off is explicit: without CloudFront the Function URL must use
+# `authType: NONE`, because IAM auth with no SigV4 signer in front makes it callable by
+# nobody. That is acceptable *only* while the API is health endpoints carrying no data
+# and no side effects. M1 introduces /v1/evaluate, which sees real tool-call arguments,
+# so CloudFront must be restored before then -- readiness of that is asserted in
+# tests/unit/test_service_stack.py rather than left to memory.
+ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+
 
 class ServiceStack(Stack):
     """Lambda + Function URL + CloudFront, plus the log group that caps log spend."""
@@ -117,10 +138,13 @@ class ServiceStack(Stack):
         log_group = self._create_log_group()
         self.function = self._create_function(stage=stage, version=version, log_group=log_group)
         self.function_url = self._create_function_url(self.function)
-        self.distribution = self._create_distribution(self.function_url)
-        # No explicit lambda:InvokeFunctionUrl grant here on purpose:
-        # FunctionUrlOrigin.with_origin_access_control() already emits one, scoped to
-        # this distribution's ARN and partition-aware. Adding a second is redundant.
+
+        self.distribution: cloudfront.Distribution | None = None
+        if ENABLE_CLOUDFRONT:
+            self.distribution = self._create_distribution(self.function_url)
+            # No explicit lambda:InvokeFunctionUrl grant here on purpose:
+            # FunctionUrlOrigin.with_origin_access_control() already emits one, scoped to
+            # this distribution's ARN and partition-aware. Adding a second is redundant.
 
         self._create_outputs()
 
@@ -218,13 +242,22 @@ class ServiceStack(Stack):
     # Edge
     # ------------------------------------------------------------------
     def _create_function_url(self, function: lambda_.Function) -> lambda_.FunctionUrl:
-        """IAM-authenticated Function URL.
+        """The Function URL, whose auth type depends on what sits in front of it.
 
-        IAM auth makes the raw URL unusable without SigV4 signing. CloudFront's Origin
-        Access Control performs that signing, so CloudFront can reach the function and
-        the open internet cannot.
+        With CloudFront (the intended shape): `AWS_IAM`. The raw URL is then unusable
+        without SigV4 signing, and only CloudFront's Origin Access Control can sign, so
+        the origin is unreachable from the open internet.
+
+        Without CloudFront: `NONE`, because IAM auth with no signer in front would make
+        the endpoint callable by nobody at all. See ENABLE_CLOUDFRONT above for why this
+        mode exists and the strict limits on when it is acceptable.
         """
-        return function.add_function_url(auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
+        auth_type = (
+            lambda_.FunctionUrlAuthType.AWS_IAM
+            if ENABLE_CLOUDFRONT
+            else lambda_.FunctionUrlAuthType.NONE
+        )
+        return function.add_function_url(auth_type=auth_type)
 
     def _create_distribution(self, function_url: lambda_.FunctionUrl) -> cloudfront.Distribution:
         """CloudFront in front of the Function URL.
@@ -256,19 +289,45 @@ class ServiceStack(Stack):
     # Outputs
     # ------------------------------------------------------------------
     def _create_outputs(self) -> None:
-        """Values the CI pipeline and the handoff notes need."""
+        """Values the CI pipeline and the handoff notes need.
+
+        `BaseUrl` is always the address callers should use, whichever edge is deployed,
+        so smoke tests and the SDK never need to know which mode is active.
+        """
+        if self.distribution is not None:
+            base_url = f"https://{self.distribution.distribution_domain_name}"
+            edge = "cloudfront"
+        else:
+            # Function URLs carry a trailing slash; strip it so callers can join paths
+            # without producing a double slash.
+            base_url = self.function_url.url.rstrip("/")
+            edge = "function-url-direct"
+
         cdk.CfnOutput(
             self,
             "BaseUrl",
-            value=f"https://{self.distribution.distribution_domain_name}",
+            value=base_url,
             description="Public base URL of the Guardrail control plane.",
             export_name=f"guardrail-base-url-{self.stage}",
         )
         cdk.CfnOutput(
             self,
+            "EdgeMode",
+            value=edge,
+            description=(
+                "cloudfront = intended posture, origin hidden behind OAC. "
+                "function-url-direct = temporary, CloudFront unavailable "
+                "(account not yet verified). Must be cloudfront before M1 ships data."
+            ),
+        )
+        cdk.CfnOutput(
+            self,
             "FunctionUrl",
             value=self.function_url.url,
-            description="Origin URL. Returns 403 unless called by CloudFront -- that is intended.",
+            description=(
+                "Lambda origin URL. With CloudFront it returns 403 to direct callers, "
+                "which is intended."
+            ),
         )
         cdk.CfnOutput(
             self,
