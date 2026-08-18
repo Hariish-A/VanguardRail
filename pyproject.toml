@@ -6,15 +6,18 @@ requires-python = ">=3.12"
 dependencies = [
     "guardrail-core",
     "guardrail-service",
+    "guardrail-sdk",
 ]
 
 [tool.uv.workspace]
-members = ["packages/*", "infra"]
+members = ["packages/*", "infra", "apps/*"]
 
 [tool.uv.sources]
 guardrail-core = { workspace = true }
 guardrail-service = { workspace = true }
 guardrail-infra = { workspace = true }
+guardrail-sdk = { workspace = true }
+demo-agent = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -33,6 +36,7 @@ dev = [
     "types-pyyaml>=6.0",
     # Infra is a dev dependency: CDK is only needed to synth/deploy, never at runtime.
     "guardrail-infra",
+    "demo-agent",
 ]
 
 # ----------------------------------------------------------------------------
@@ -49,6 +53,10 @@ ignore = ["S101"]  # assert is fine in tests
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "B"]
+# These exceptions are control flow an agent catches by name -- `except ActionBlocked`
+# reads better than `except ActionBlockedError` at every call site, and they are part
+# of the SDK's public vocabulary.
+"packages/guardrail-sdk/src/guardrail_sdk/exceptions.py" = ["N818"]
 
 # ----------------------------------------------------------------------------
 # Types

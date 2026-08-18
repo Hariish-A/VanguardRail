@@ -8,9 +8,11 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "demo-agent",
     "guardrail",
     "guardrail-core",
     "guardrail-infra",
+    "guardrail-sdk",
     "guardrail-service",
 ]
 
@@ -402,6 +404,23 @@ wheels = [
 ]
 
 [[package]]
+name = "demo-agent"
+version = "0.1.0"
+source = { editable = "apps/demo-agent" }
+dependencies = [
+    { name = "guardrail-sdk" },
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "guardrail-sdk", editable = "packages/guardrail-sdk" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.9" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -423,6 +442,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "guardrail-core" },
+    { name = "guardrail-sdk" },
     { name = "guardrail-service" },
 ]
 
@@ -430,6 +450,7 @@ dependencies = [
 dev = [
     { name = "boto3" },
     { name = "boto3-stubs", extra = ["dynamodb", "ssm"] },
+    { name = "demo-agent" },
     { name = "guardrail-infra" },
     { name = "httpx" },
     { name = "hypothesis" },
@@ -445,6 +466,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "guardrail-core", editable = "packages/guardrail-core" },
+    { name = "guardrail-sdk", editable = "packages/guardrail-sdk" },
     { name = "guardrail-service", editable = "packages/guardrail-service" },
 ]
 
@@ -452,6 +474,7 @@ requires-dist = [
 dev = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "boto3-stubs", extras = ["dynamodb", "ssm"], specifier = ">=1.35" },
+    { name = "demo-agent", editable = "apps/demo-agent" },
     { name = "guardrail-infra", editable = "infra" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.100" },
@@ -492,6 +515,23 @@ dependencies = [
 requires-dist = [
     { name = "aws-cdk-lib", specifier = ">=2.180.0" },
     { name = "constructs", specifier = ">=10.3,<11" },
+]
+
+[[package]]
+name = "guardrail-sdk"
+version = "0.1.0"
+source = { editable = "packages/guardrail-sdk" }
+dependencies = [
+    { name = "guardrail-core" },
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "guardrail-core", editable = "packages/guardrail-core" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.9" },
 ]
 
 [[package]]
