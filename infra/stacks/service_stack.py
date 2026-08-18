@@ -97,26 +97,43 @@ SKIP_BUNDLING = os.environ.get("GUARDRAIL_SKIP_BUNDLING", "").lower() in {"1", "
 
 PLACEHOLDER_ASSET = Path(__file__).parent.parent / "placeholder"
 
-# CloudFront is the intended front door: it hides the origin behind an Origin Access
-# Control and lets the console and API share one domain from M3 onward.
+# The Lambda Function URL is the edge. CloudFront is an OPTIONAL enhancement, off by
+# default.
 #
-# Brand-new AWS accounts cannot create distributions at all -- CloudFront returns
-# "Your account must be verified before you can add new CloudFront resources", which
-# needs a (free) AWS Support case and typically 24-48 hours. Rather than block the
-# entire milestone on that queue, this flag deploys the Lambda behind a direct Function
-# URL so the service is genuinely live and verifiable today.
+# Originally CloudFront was the front door, hiding the origin behind an Origin Access
+# Control. Brand-new AWS accounts cannot create distributions at all -- CloudFront
+# returns "Your account must be verified before you can add new CloudFront resources",
+# which needs an AWS Support case and 24-48 hours. Rather than make the architecture
+# depend on a support queue, security moved where it belongs: into the application.
 #
-# The trade-off is explicit: without CloudFront the Function URL must use
-# `authType: NONE`, because IAM auth with no SigV4 signer in front makes it callable by
-# nobody. That is acceptable *only* while the API is health endpoints carrying no data
-# and no side effects. M1 introduces /v1/evaluate, which sees real tool-call arguments,
-# so CloudFront must be restored before then -- readiness of that is asserted in
-# tests/unit/test_service_stack.py rather than left to memory.
-ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "true").lower() not in {
-    "0",
-    "false",
-    "no",
+# A public HTTPS endpoint whose every request is authenticated is the normal shape of a
+# production API -- API Gateway endpoints are public too. Hiding the origin was defence
+# in depth, not the actual control. The actual controls are:
+#
+#   * agents        -> SigV4-signed requests (authType AWS_IAM), or hashed API keys
+#   * console users -> Cognito JWT validated in the app (M3)
+#   * abuse         -> reserved concurrency + per-tenant token bucket (M5)
+#
+# Setting GUARDRAIL_ENABLE_CLOUDFRONT=true restores the distribution once an account is
+# verified, for edge caching and a custom domain. Nothing else in the system changes:
+# BaseUrl is emitted either way, so the SDK and smoke tests never learn which is active.
+ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "false").lower() in {
+    "1",
+    "true",
+    "yes",
 }
+
+# Origins allowed to call the API from a browser. The M3 review console is served from
+# static hosting on a different origin (GitHub Pages), so the browser sends a preflight;
+# Function URLs answer it natively, with no gateway or proxy in between.
+#
+# Deliberately not "*": credentials are sent with console requests, and a wildcard origin
+# with credentials is both rejected by browsers and wrong in principle.
+CONSOLE_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("GUARDRAIL_CONSOLE_ORIGINS", "http://localhost:5173").split(",")
+    if origin.strip()
+]
 
 
 class ServiceStack(Stack):
@@ -242,22 +259,39 @@ class ServiceStack(Stack):
     # Edge
     # ------------------------------------------------------------------
     def _create_function_url(self, function: lambda_.Function) -> lambda_.FunctionUrl:
-        """The Function URL, whose auth type depends on what sits in front of it.
+        """The public HTTPS edge for the control plane.
 
-        With CloudFront (the intended shape): `AWS_IAM`. The raw URL is then unusable
-        without SigV4 signing, and only CloudFront's Origin Access Control can sign, so
-        the origin is unreachable from the open internet.
+        `authType` is NONE because the callers are a browser console (which cannot sign
+        SigV4 without an identity pool) and agents running anywhere -- including outside
+        AWS. Authentication is enforced per request inside the application: Cognito JWT
+        for console users, hashed API keys for agents. That is the same posture as any
+        public API endpoint; the URL being reachable is not itself the vulnerability.
 
-        Without CloudFront: `NONE`, because IAM auth with no signer in front would make
-        the endpoint callable by nobody at all. See ENABLE_CLOUDFRONT above for why this
-        mode exists and the strict limits on when it is acceptable.
+        With CloudFront enabled the auth type becomes AWS_IAM, so only the distribution's
+        Origin Access Control can reach the origin -- defence in depth on top of the
+        application checks, not a replacement for them.
+
+        CORS is configured here rather than in FastAPI middleware: Function URLs answer
+        preflight requests themselves, so the OPTIONS round trip never pays a Lambda cold
+        start, and a misconfigured app can't accidentally widen the policy.
         """
-        auth_type = (
-            lambda_.FunctionUrlAuthType.AWS_IAM
-            if ENABLE_CLOUDFRONT
-            else lambda_.FunctionUrlAuthType.NONE
+        if ENABLE_CLOUDFRONT:
+            return function.add_function_url(auth_type=lambda_.FunctionUrlAuthType.AWS_IAM)
+
+        return function.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.NONE,
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=CONSOLE_ORIGINS,
+                # OPTIONS is deliberately absent: Function URLs answer preflight
+                # themselves and reject OPTIONS as an enum value here.
+                allowed_methods=[lambda_.HttpMethod.GET, lambda_.HttpMethod.POST],
+                allowed_headers=["content-type", "authorization", "x-api-key", "x-request-id"],
+                # Lets the SDK read back the correlation id it was assigned.
+                exposed_headers=["x-request-id"],
+                allow_credentials=True,
+                max_age=Duration.hours(1),
+            ),
         )
-        return function.add_function_url(auth_type=auth_type)
 
     def _create_distribution(self, function_url: lambda_.FunctionUrl) -> cloudfront.Distribution:
         """CloudFront in front of the Function URL.

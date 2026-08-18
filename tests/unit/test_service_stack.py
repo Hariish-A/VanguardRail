@@ -2,11 +2,11 @@
 
 Two jobs:
 
-1. Guard the security posture. The Function URL may only be public (`authType: NONE`)
-   while CloudFront is absent AND the API carries nothing but health endpoints. Once
-   /v1/evaluate exists it will see real tool-call arguments, so the origin must be back
-   behind CloudFront's Origin Access Control. That is asserted here rather than left to
-   anybody's memory.
+1. Guard the security posture. The Lambda Function URL is intentionally public, so
+   authentication has to live in the application. Every route that is not explicitly
+   listed as public must declare an auth dependency; the tripwire below fails the build
+   otherwise, rather than leaving it to anybody's memory. CloudFront remains available
+   as optional defence in depth and is covered separately.
 
 2. Guard the cost shape -- arm64, bounded log retention, no surprise resources.
 """
@@ -93,52 +93,83 @@ def test_with_cloudfront_only_cloudfront_may_invoke_the_url() -> None:
 
 
 def test_without_cloudfront_no_distribution_is_created() -> None:
-    """The temporary mode used while the AWS account awaits CloudFront verification."""
+    """The default deployment shape: no CloudFront, no dependency on account verification."""
     template = _synth(enable_cloudfront=False)
 
     assert _resources_of_type(template, "AWS::CloudFront::Distribution") == []
 
 
-def test_without_cloudfront_the_url_is_public_because_nothing_can_sign() -> None:
-    """Documents the trade-off rather than hiding it.
+def test_default_edge_is_a_public_function_url_with_cors() -> None:
+    """The default posture: public URL, authentication enforced in the application.
 
-    IAM auth with no signer in front would make the endpoint callable by nobody, so this
-    mode necessarily exposes the Function URL. It is acceptable only while the API is
-    health endpoints with no data and no side effects -- which the next test enforces.
+    CORS is set on the Function URL so preflight requests are answered at the edge and
+    never pay a Lambda cold start.
     """
     template = _synth(enable_cloudfront=False)
 
     urls = _resources_of_type(template, "AWS::Lambda::Url")
 
     assert len(urls) == 1
-    assert urls[0]["Properties"]["AuthType"] == "NONE"
+    props = urls[0]["Properties"]
+    assert props["AuthType"] == "NONE"
+
+    cors = props["Cors"]
+    # OPTIONS must NOT be listed: Function URLs answer preflight themselves and
+    # CloudFormation rejects OPTIONS as an AllowMethods enum value.
+    assert "OPTIONS" not in cors["AllowMethods"]
+    assert set(cors["AllowMethods"]) == {"GET", "POST"}
+    assert cors["AllowCredentials"] is True
+    # A wildcard origin alongside credentials is rejected by browsers and wrong anyway.
+    assert "*" not in cors["AllowOrigins"]
 
 
-def test_public_function_url_is_only_allowed_while_the_api_is_health_only() -> None:
-    """The tripwire that prevents shipping a public origin once real data flows.
+PUBLIC_PATH_PREFIXES = ("/healthz", "/readyz", "/version", "/docs", "/openapi", "/redoc")
+"""Routes that are unauthenticated by design: liveness, readiness, and API docs."""
 
-    When M1 adds /v1/evaluate, this test fails until CloudFront is restored -- turning a
-    security regression into a red build instead of something nobody remembers to check.
-    """
+
+def _data_paths() -> list[str]:
+    """Every route that is not intentionally public."""
     from guardrail_service.app import app
 
-    data_paths = [
-        path
-        for path in app.openapi()["paths"]
-        if not path.startswith(("/healthz", "/readyz", "/version", "/docs", "/openapi"))
-    ]
+    return sorted(
+        path for path in app.openapi()["paths"] if not path.startswith(PUBLIC_PATH_PREFIXES)
+    )
 
-    if not data_paths:
-        pytest.skip("API is still health-only; the public Function URL mode is acceptable")
 
-    template = _synth(enable_cloudfront=False)
-    urls = _resources_of_type(template, "AWS::Lambda::Url")
+def test_every_data_endpoint_is_authenticated() -> None:
+    """The tripwire: the edge is a public URL, so auth must live in the application.
 
-    pytest.fail(
-        "The API now exposes data endpoints "
-        f"({', '.join(sorted(data_paths))}), so the origin must sit behind CloudFront. "
-        "Deploy with GUARDRAIL_ENABLE_CLOUDFRONT=true (requires AWS account "
-        f"verification for CloudFront). Current auth type: {urls[0]['Properties']['AuthType']}."
+    Since the origin is deliberately reachable, "is it authenticated?" is the only
+    control that matters. This fails the build the moment a route appears that neither
+    is explicitly public nor declares an auth dependency -- turning a silent security
+    regression into a red build.
+
+    Skips only while the API is health-only, which is true through M0.
+    """
+    paths = _data_paths()
+    if not paths:
+        pytest.skip("API is still health-only; there is nothing yet to authenticate")
+
+    from guardrail_service.app import app
+
+    unprotected = []
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if path is None or path.startswith(PUBLIC_PATH_PREFIXES):
+            continue
+        # An authenticated route carries at least one security dependency, registered
+        # either on the route or on its router.
+        dependant = getattr(route, "dependant", None)
+        has_auth = bool(dependant and dependant.security_requirements)
+        if not has_auth:
+            unprotected.append(path)
+
+    assert not unprotected, (
+        f"These routes are publicly reachable with no authentication: {unprotected}. "
+        "The Lambda Function URL is intentionally public, so every non-health route "
+        "must declare an auth dependency (Cognito JWT for console users, hashed API key "
+        "for agents). Add one, or list the route in PUBLIC_PATH_PREFIXES if it is "
+        "genuinely meant to be open."
     )
 
 
