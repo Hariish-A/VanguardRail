@@ -6,7 +6,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `master` is this repository's working branch; `main` is kept for the deploy job,
+    # which is gated on it separately below. Filtering pushes to `main` alone meant the
+    # whole workflow silently never ran -- the checks existed and were never executed,
+    # which is indistinguishable from not having them.
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
