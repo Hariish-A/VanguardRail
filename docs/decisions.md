@@ -341,3 +341,71 @@ that holds the reviewer's key.
 stops under `prefers-reduced-motion`, and the four outcomes are never distinguished by
 colour alone — each badge carries its word, `block` is filled where `allow` is outlined,
 and `require_hitl` pulses because it is the one outcome not yet settled.
+
+---
+
+## ADR-022 — Publishing and activating stay separate in the UI
+
+**Decision.** The console never calls `POST /v1/policies?activate=true`, even though the
+API supports it. Publishing and activating are two buttons, in two sections, with
+different wording.
+
+**Why.** Publishing stores an immutable version that governs nobody. Activating changes
+what every agent in the tenant is permitted to do, immediately, with no deploy. They carry
+completely different risk and are frequently done by different people at different times —
+publish during review, activate during a change window.
+
+A single "save" that did both would make *save my draft* and *change the rules the system
+enforces* the same gesture. In a governance product that is not a convenience, it is the
+failure mode.
+
+**Cost.** Two clicks instead of one for the operator who genuinely wants both, and a
+publish that somebody forgets to activate — visible as "published, not in force" in the
+version history, which is the safe direction to fail.
+
+---
+
+## ADR-023 — Change impact is reported by direction, not as a diff
+
+**Decision.** Compare candidate against active by running actions through both and
+classifying each difference as `looser`, `stricter`, or `same`, using the engine's own
+effect ordering.
+
+**Why.** A YAML diff answers which characters moved. The question a reviewer actually has
+is which *actions* would be decided differently, and specifically which would become
+permitted. "3 decisions changed" is a fact nobody acts on; "one action that is blocked
+today would be allowed" is a decision to make.
+
+Ordering matters more than it looks. Getting the comparison backwards would label a
+dangerous change as a tightening and a tightening as a risk — an inversion that makes the
+tool worse than not having it. `compareDecisions` is therefore tested over the full 4x4
+matrix rather than on a few examples.
+
+**Cost.** Coverage is the scenario corpus, not production traffic: a change affecting a
+tool no scenario exercises reports as no impact. Stated on the page rather than implied by
+a green result.
+
+---
+
+## ADR-024 — The console's scenario corpus is generated at build time
+
+**Decision.** Compile `scenarios/*.yaml` into `src/generated/scenarios.json` in a prebuild
+step that every npm script runs, and fail the Python suite if the two ever disagree.
+
+**Why.** The Conformance page reports pass/fail in green. A hand-maintained copy of the
+corpus would drift, and a conformance report built from a stale copy is worse than no
+report — it reports success against scenarios nobody enforces any more.
+
+Generating makes drift impossible to survive a build; `test_console_scenarios.py` catches
+the remaining case, a checked-in generated file edited by hand. That test was verified by
+weakening one expectation and confirming it goes red.
+
+**Cost.** A second implementation of the expectation checker, in TypeScript, which can
+disagree with the Python one. Bounded three ways: the inputs are generated, every
+assertion kind has a unit test written from the Python semantics, and the page names
+`guardrail-sim` as canonical so a disagreement is investigated rather than averaged.
+
+**And the page says what it is not.** It runs through `/v1/simulate`, so opening it does
+not write to the audit chain — which also means it does not exercise authentication,
+DynamoDB, or the audit write. CI does, on the enforcement path. Both facts are printed on
+the page.

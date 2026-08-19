@@ -10,6 +10,12 @@
 import { Aurora } from "@/components/effects";
 import { Shell } from "@/components/Shell";
 import { AgentConsolePage } from "@/pages/AgentConsole";
+import { ChangeImpactPage } from "@/pages/ChangeImpact";
+import { ConformancePage } from "@/pages/Conformance";
+import { DryRunPage } from "@/pages/DryRun";
+import { McpProxyPage } from "@/pages/McpProxy";
+import { PlaygroundPage } from "@/pages/Playground";
+import { PolicyStudioPage } from "@/pages/PolicyStudio";
 import { AuditChainPage } from "@/pages/AuditChain";
 import { ConnectPage } from "@/pages/Connect";
 import { DecisionTheatrePage } from "@/pages/DecisionTheatre";
@@ -43,6 +49,18 @@ function Routed() {
         return <AuditChainPage />;
       case "/health":
         return <SystemHealthPage />;
+      case "/policy":
+        return <PolicyStudioPage />;
+      case "/impact":
+        return <ChangeImpactPage />;
+      case "/playground":
+        return <PlaygroundPage />;
+      case "/dryrun":
+        return <DryRunPage />;
+      case "/conformance":
+        return <ConformancePage />;
+      case "/mcp":
+        return <McpProxyPage />;
       case "/":
         return <OverviewPage />;
       default:

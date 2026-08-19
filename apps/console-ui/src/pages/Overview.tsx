@@ -23,7 +23,7 @@ import {
   Spotlight,
   TextGenerate,
 } from "@/components/effects";
-import { NAV } from "@/components/Shell";
+import { NAV_GROUPS } from "@/components/Shell";
 import { Badge, Button, Card, KeyValue, SectionTitle, Skeleton } from "@/components/ui";
 
 const OUTCOMES: Effect[] = ["allow", "log_and_allow", "require_hitl", "block"];
@@ -444,18 +444,39 @@ export function OverviewPage() {
 
       {/* ---------------------------------------------------------- Wayfinding */}
       <section>
-        <SectionTitle title="Everything else in here" />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {NAV.filter((item) => item.path !== "/").map((item) => (
-            <a key={item.path} href={`#${item.path}`} className="block">
-              <GlowCard className="h-full p-5 transition-transform duration-200 hover:-translate-y-0.5">
-                <div className="flex items-center gap-2.5">
-                  <span className="font-mono text-[13px] text-brand-400">{item.glyph}</span>
-                  <span className="text-[14px] font-medium text-ink-100">{item.label}</span>
-                </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-400">{item.blurb}</p>
-              </GlowCard>
-            </a>
+        <SectionTitle
+          title="Everything else in here"
+          hint="Three jobs, usually done by three different people. A reviewer approving a held action should not have to read past the policy-authoring tools to find the queue."
+        />
+        <div className="space-y-6">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="mb-2.5 flex flex-wrap items-baseline gap-3">
+                <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-ink-300">
+                  {group.title}
+                </span>
+                <span className="text-[12.5px] text-ink-500">{group.hint}</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {group.items.map((item) => (
+                  <a key={item.path} href={`#${item.path}`} className="block">
+                    <GlowCard className="h-full p-5 transition-transform duration-200 hover:-translate-y-0.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-mono text-[13px] text-brand-400">
+                          {item.glyph}
+                        </span>
+                        <span className="text-[14px] font-medium text-ink-100">
+                          {item.label}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-[13px] leading-relaxed text-ink-400">
+                        {item.blurb}
+                      </p>
+                    </GlowCard>
+                  </a>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </section>

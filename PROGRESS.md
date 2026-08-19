@@ -7,7 +7,7 @@
 
 **Project:** Guardrail — an action-layer guardrail for AI agents (problem statement PS-3.1).
 **Repository root:** `d:\Official\Projects\Guardrial`
-**Last updated:** end of Milestone 6.
+**Last updated:** end of Milestone 7.
 
 ---
 
@@ -1039,6 +1039,137 @@ Policy Studio (author and publish a bundle from the browser), change-impact diff
 playground, dry-run and shadow view, the conformance report, and an MCP proxy view. All
 six read or write endpoints that already exist; none needs backend work beyond what is
 built.
+
+---
+
+---
+
+## 3.16 Milestone 7 — the policy surface
+
+**Status: complete, deployed, verified against live AWS.**
+
+M6 gave the system a face for *operating* it. M7 gives it one for *changing* it, and for
+executing the claims it makes about itself.
+
+### What was built
+
+| Page | Answers |
+|---|---|
+| Policy Studio | Read, author, validate, publish, activate, roll back |
+| Change Impact | Which decisions a candidate policy would change — and which would become *permitted* |
+| Playground | Probe any version or draft; find rules that match **nothing** |
+| Dry-run & Shadow | Three levels of evaluate-without-enforcing, plus a parity run |
+| Conformance | The real corpus, run against live AWS from the browser |
+| MCP Proxy | Governing a tool server that knows nothing about Guardrail |
+
+**No backend work was needed.** That was the claim made when M7 was scoped, and it held:
+`/v1/simulate` already accepted a published `version` or an inline candidate `bundle`, and
+the policy lifecycle endpoints already existed. The only additions were client-side.
+
+### Publishing is not activating, and the console enforces that
+
+The API supports `POST /v1/policies?activate=true`. The console deliberately never sets
+it. Publishing stores an immutable, attributed version that governs nobody; activating
+changes what every agent in the tenant may do, immediately, with no deploy. One control
+that did both would make "save my draft" and "change the rules the system enforces" the
+same gesture — precisely the mistake a governance product should not ship.
+
+Rolling back is activating a lower version. There is no separate rollback path anywhere in
+this system: a distinct one would be code that runs only during incidents, which is the
+worst possible test-coverage profile for the operation you most need to work.
+
+### Change Impact says "would become permitted", not "changed"
+
+"3 decisions changed" is a fact. "One action that is blocked today would be allowed" is a
+decision to make. Direction is computed from the engine's own effect ordering
+(`block > require_hitl > log_and_allow > allow`), so *looser* means precisely "restrains
+less" rather than "the text differs". Getting that comparison backwards would label a
+dangerous change as a tightening — the exact inversion that makes a review tool worse than
+none — so `compareDecisions` is tested over the full 4x4 matrix.
+
+### The Playground looks for rules that defend nothing
+
+A rule that matches nothing looks exactly like coverage: it sits in the file, reads
+convincingly, is counted in "12 rules", and defends nothing. **This repository has hit that
+failure mode three times in its own tests.** Policy has the identical shape, so the
+Playground runs every corpus action against the selected bundle and names the rules that
+never matched — while saying plainly that it cannot distinguish "the corpus does not
+exercise it" from "its predicate is unsatisfiable". Only the author can, and they cannot
+ask until somebody shows them.
+
+### The console corpus is generated, and a test enforces it
+
+`apps/console-ui/src/generated/scenarios.json` is compiled from `scenarios/*.yaml` by a
+prebuild step that `dev`, `build`, `test`, and `typecheck` all run first.
+`tests/unit/test_console_scenarios.py` compares the two and fails on any divergence in
+ids, expectations, arguments, or the `critical` flag — verified by deliberately weakening
+one expectation and watching it go red.
+
+A conformance page built from a hand-maintained copy would eventually report green against
+scenarios nobody enforces, which is worse than no report at all.
+
+The page also states that it is **not** the gate. `guardrail-sim` is: it validates the DSL
+far more strictly, runs offline and against a real container, emits JUnit XML, and contains
+`test_the_suite_actually_fails_when_policy_regresses`. The console runs through
+`/v1/simulate` so that opening the page does not put twenty rows of speculation into the
+tamper-evident log; CI runs the enforcement path, which additionally exercises auth,
+DynamoDB, and the audit write. Both facts are on the page.
+
+### The one page that costs something, and says so
+
+A parity run calls `/v1/evaluate` twice per scenario — `dry_run` true, then false — and
+both writes land in the audit chain. That is deliberate: running parity through
+`/v1/simulate` would prove nothing about the enforcement path, because simulation is a
+different code path by construction. The page states the cost, shows the audit sequence
+moving, and defaults to the five success criteria rather than the full corpus, because the
+table is provisioned at 5 write units.
+
+### Navigation had to change
+
+Twelve destinations do not fit a horizontal bar. The shell became a grouped sidebar —
+**Operate**, **Policy**, **Evidence** — which also says something the bar could not: those
+are three different jobs, usually done by three different people. A reviewer approving a
+held action should not have to read past the policy-authoring tools to find the queue.
+
+A nav item whose *primary action* the current key cannot perform carries a dot rather than
+being hidden: the page still opens, because reading the review queue or the policy history
+is useful and harmless.
+
+### Verified live
+
+The full lifecycle, against the deployed control plane:
+
+```text
+1. BEFORE                     count=150 -> block  (policy v3)
+2. publish v4 (threshold 250) published v4, activated=False
+3. AFTER PUBLISH              count=150 -> block  (policy v3)   <- publishing changes nothing
+4. activate v4                v4 in force, from v3 (rollforward)
+5. AFTER ACTIVATE             count=150 -> allow  (policy v4)   <- no redeploy involved
+6. activate v3                v3 in force, from v4 (rollback)
+7. AFTER ROLLBACK             count=150 -> block  (policy v3)
+```
+
+Also verified: a `reviewer` key gets **403** on publish; simulating one action against the
+active policy and against an inline candidate returns `block` and `allow` respectively,
+which is exactly the LOOSER finding Change Impact reports; conformance **20/20** against
+the live endpoint; chain valid across 1000 records; active policy back to v3 with 4
+versions published.
+
+**441 Python tests** (up from 434) and **70 console tests** (up from 33). AWS spend
+unchanged at **$0.00** — no new resource of any kind; M7 is entirely client-side.
+
+### Known limits, stated on the pages themselves
+
+* **Change Impact covers the corpus, not your traffic.** Twenty actions. A policy change
+  affecting a tool no scenario exercises reports as no impact.
+* **The conformance checker is a second implementation.** `checkExpectation` mirrors
+  `guardrail_sim.runner.check` in TypeScript, and two implementations of one rule can
+  disagree. Bounded by generating the inputs, unit-testing every assertion kind from the
+  Python semantics, and naming the canonical runner on the page.
+* **The MCP page cannot prove the proxy.** It runs the four MCP scenarios live, which
+  verifies the *policy*. What verifies the *proxy obeyed it* is the leak canary in
+  `scripts/mcp_demo.py`, and the page separates the two rather than letting a green tick
+  imply both.
 
 ---
 

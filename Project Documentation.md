@@ -1001,11 +1001,60 @@ control plane over HTTPS. It is the human surface of everything in this document
 | Page | Answers |
 |---|---|
 | **Overview** | What an action guardrail is, how it differs from a text guardrail, and what has actually been proven. Readable without a credential — it is what a first-time reader lands on |
+| **Policy Studio** | Read, author, validate, publish, activate, roll back. Publishing and activating are separate controls on purpose |
+| **Change Impact** | Runs the corpus through the active policy and a candidate and reports where they disagree — calling out which actions would become *permitted* |
+| **Playground** | Probes any version or draft, and names rules that matched **nothing** across the whole corpus |
+| **Dry-run & Shadow** | The three levels of evaluate-without-enforcing, and a parity run on the enforcement path proving dry-run reports what enforcement really does |
+| **Conformance** | The real `scenarios/*.yaml` corpus, compiled in at build time, run against live AWS |
+| **MCP Proxy** | How a third-party tool server is governed with no changes to it, and what the leak canary proves that a browser cannot |
 | **Agent Console** | Runs the AWS-hosted agent against a live model and shows the governed transcript: every tool it tried, the rule that fired, and the audit sequence number the decision landed at |
 | **Decision Theatre** | Sends any tool call to `/v1/evaluate` or `/v1/simulate` and shows the verdict, every matching rule, the derived facts, and the latency |
 | **Review Queue** | The HITL surface: approve or deny an action held before execution, with a reason, under a live countdown to the timeout |
 | **Audit & Chain** | Every decision, and the chain verdict from `/v1/audit/verify` — with the chain's limits stated on the page rather than buried in a document |
 | **System Health** | `/healthz`, `/readyz`, the policy in force, and the free-tier ceilings that shape the design |
+
+### Twelve screens, three groups
+
+*Operate* is day-to-day work: run agents, judge actions, answer for them. *Policy* is
+changing the rules, and knowing what a change would do first. *Evidence* is the claims
+this project makes, executed rather than asserted. They are usually three different
+people, and a reviewer approving a held action should not have to read past the
+policy-authoring tools to find the queue.
+
+### Publishing is not activating
+
+The API supports `POST /v1/policies?activate=true`. The console deliberately does not use
+it. Publishing stores an immutable version that governs nobody; activating changes what
+every agent in the tenant may do, immediately, with no deploy. One control that did both
+would make "save my draft" and "change the rules the system enforces" the same gesture.
+
+Rolling back is activating a lower version — there is no separate rollback path anywhere
+in this system, because a distinct one would be code that runs only during incidents,
+which is the worst possible test-coverage profile for the operation you most need to work.
+
+### Finding rules that defend nothing
+
+The Playground runs every corpus action against the selected policy and names the rules
+that never matched. A rule that matches nothing looks exactly like coverage: it sits in
+the file, reads convincingly, is counted in "12 rules", and defends nothing. That failure
+mode has happened three times in this repository's own tests.
+
+Some of the class is caught earlier — a rule naming a nonexistent derived fact is rejected
+at load time, an invalid regex fails on upload, an unknown operator is a load-time error.
+What survives is the rule that is *valid* and still inert: a threshold nothing reaches, a
+tool nobody calls, a condition that is always UNKNOWN.
+
+### The console's scenario corpus is generated, not copied
+
+`apps/console-ui/src/generated/scenarios.json` is compiled from `scenarios/*.yaml` by a
+prebuild step that every npm script runs first, and `test_console_scenarios.py` fails if
+the two ever disagree. A conformance report built from a hand-maintained copy would
+eventually report green against scenarios nobody enforces — worse than no report.
+
+The canonical runner remains `guardrail-sim`, which gates a pull request, validates the
+DSL far more strictly, runs offline and against a container, emits JUnit XML, and contains
+the test that deletes a rule and requires the suite to go red. The console page says so
+rather than letting a green tick imply it is the gate.
 
 ### The side-effect ledger
 
@@ -1073,7 +1122,7 @@ yet settled.
 | **M4** ✅ | Simulation harness, dry-run, policy versioning | Green conformance report against prod; dry run executes nothing; a new bundle version changes behaviour with no redeploy |
 | **M5** ✅ | Hardening, multi-tenancy, MCP proxy, load test | MCP proxy governs an off-the-shelf MCP server that knows nothing about Guardrail |
 | **M6** ✅ | React console on AWS: overview, agent console, decision theatre, review queue, audit chain, system health, plus `/v1/me` | A judge opens an HTTPS URL, pastes a key, runs the AWS-hosted agent, watches an action be held, and approves it — with no laptop of ours involved |
-| **M7** | Policy Studio, change-impact diff, policy playground, dry-run and shadow, conformance report, MCP proxy view | Publishing and rolling back a bundle from the browser changes live behaviour, with the impact shown before it is applied |
+| **M7** ✅ | Policy Studio, change-impact diff, policy playground, dry-run and shadow, conformance report, MCP proxy view | Verified live: publishing v4 changed nothing, activating it flipped a 150-row delete from `block` to `allow` with no redeploy, and activating v3 restored it |
 
 ### On the bonus requirement
 

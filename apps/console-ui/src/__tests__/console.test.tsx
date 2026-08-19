@@ -16,6 +16,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
+import { NAV } from "@/components/Shell";
 import { EFFECT_MEANING, EFFECT_STYLE, formatClock, shortHash } from "@/lib/format";
 import type { Capability, Effect } from "@/lib/types";
 
@@ -385,5 +386,160 @@ describe("audit page", () => {
     expect(
       screen.getByText(/consistent rewrite of the whole chain/i),
     ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M7 — the policy surface
+// ---------------------------------------------------------------------------
+
+describe("navigation", () => {
+  it("every destination renders something other than the fallback", async () => {
+    // A route added to the nav but not to the router silently falls through to the
+    // Overview, which looks like a working link and is a dead one.
+    stubApi({ "/v1/me": identity("admin", ["publish_policy", "resolve_decisions"]) });
+    connectAs("admin", ["publish_policy"]);
+
+    for (const item of NAV) {
+      if (item.path === "/") continue;
+      window.location.hash = `#${item.path}`;
+      const view = render(<App />);
+      // The Overview's hero is unmistakable; seeing it anywhere else means the route
+      // fell through to the default case.
+      expect(
+        view.queryByRole("heading", { name: /Guardrails for what an agent/i }),
+        `${item.path} fell through to the Overview — is it wired in App.tsx?`,
+      ).toBeNull();
+      view.unmount();
+    }
+  });
+});
+
+describe("policy studio permissions", () => {
+  it("hides publish and activate from a key that cannot change policy", async () => {
+    // Same shape as the review-queue gate, and the same reasoning: an agent whose key
+    // can rewrite the policy governing it is not governed at all.
+    stubApi({
+      "/v1/me": identity("reviewer", ["read_policy", "resolve_decisions"]),
+      "/v1/policies/active": {
+        bundle_id: "default",
+        version: 3,
+        source: "published",
+        degraded: false,
+        rule_count: 2,
+        mode: "enforce",
+        document: { apiVersion: "guardrail/v1", rules: [] },
+      },
+    });
+    connectAs("reviewer", ["read_policy", "resolve_decisions"]);
+    window.location.hash = "#/policy";
+
+    render(<App />);
+
+    // Reading policy stays open — knowing the rules you are bound by is not a risk.
+    expect(await screen.findByText(/Version history/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /publish as a new version/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Read-only/i).length).toBeGreaterThan(0);
+  });
+
+  it("offers publish to an admin, and keeps it separate from activate", async () => {
+    // The load-bearing distinction on that page: publishing is safe, activating is the
+    // deliberate act. One button that did both would make "save my draft" and "change
+    // what every agent may do" the same gesture.
+    stubApi({
+      "/v1/me": identity("admin", ["read_policy", "publish_policy"]),
+      "/v1/policies/active": {
+        bundle_id: "default",
+        version: 3,
+        source: "published",
+        degraded: false,
+        rule_count: 2,
+        mode: "enforce",
+        document: { apiVersion: "guardrail/v1", rules: [] },
+      },
+      "/v1/policies": {
+        bundle_id: "default",
+        tenant_id: "acme",
+        active_version: 3,
+        active_source: "published",
+        degraded: false,
+        versions: [
+          {
+            version: 2,
+            published_at: new Date().toISOString(),
+            published_by: "someone",
+            description: "older",
+            content_hash: "a".repeat(64),
+            rule_count: 2,
+            mode: "enforce",
+            is_active: false,
+          },
+        ],
+      },
+    });
+    connectAs("admin", ["read_policy", "publish_policy"]);
+    window.location.hash = "#/policy";
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: /publish as a new version/i }),
+    ).toBeInTheDocument();
+    // An older version offers rollback, worded as such rather than as "activate" —
+    // the version list loads separately from the active bundle, so wait for it.
+    expect(
+      await screen.findByRole("button", { name: /roll back to this/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("evidence pages", () => {
+  it("conformance names the canonical runner rather than implying it is the gate", async () => {
+    stubApi({ "/v1/me": identity("agent", ["simulate"]) });
+    connectAs("agent", ["simulate"]);
+    window.location.hash = "#/conformance";
+
+    render(<App />);
+
+    expect(await screen.findByText(/This page is not the gate/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/guardrail-sim/).length).toBeGreaterThan(0);
+  });
+
+  it("the MCP page separates what it proves from what it cannot", async () => {
+    // The live scenarios verify the policy. Only the canary in scripts/mcp_demo.py
+    // verifies the proxy obeyed it, and a green tick must not imply both.
+    stubApi({ "/v1/me": identity("agent", ["simulate"]) });
+    connectAs("agent", ["simulate"]);
+    window.location.hash = "#/mcp";
+
+    render(<App />);
+
+    expect(await screen.findByText(/leak canary/i)).toBeInTheDocument();
+    expect(screen.getByText(/the part a browser cannot prove/i)).toBeInTheDocument();
+  });
+
+  it("dry-run states that a parity run writes to the audit chain", async () => {
+    // It does, and that is the point — running parity through simulate would prove
+    // nothing about the enforcement path. Hiding the cost would be the dishonest part.
+    stubApi({
+      "/v1/me": identity("agent", ["evaluate"]),
+      "/v1/policies/active": {
+        bundle_id: "default",
+        version: 3,
+        source: "published",
+        degraded: false,
+        rule_count: 2,
+        mode: "enforce",
+        document: {},
+      },
+    });
+    connectAs("agent", ["evaluate"]);
+    window.location.hash = "#/dryrun";
+
+    render(<App />);
+
+    expect(await screen.findByText(/writes to the audit chain/i)).toBeInTheDocument();
   });
 });

@@ -21,7 +21,7 @@ audit chain. Nothing runs locally.
 
 ## Status
 
-**All six milestones complete, deployed, and verified against live AWS.**
+**All seven milestones complete, deployed, and verified against live AWS.**
 
 | | Scope | State |
 |---|---|---|
@@ -32,9 +32,9 @@ audit chain. Nothing runs locally.
 | M4 | Simulation harness, dry run, versioned policy | deployed |
 | M5 | Hardening, multi-tenancy, MCP proxy, load test | deployed |
 | M6 | React console on AWS, roles surfaced in the UI, `/v1/me` | deployed |
-| M7 | Policy Studio, change-impact diff, playground, conformance and MCP views | planned |
+| M7 | Policy Studio, change-impact diff, playground, dry-run, conformance, MCP view | deployed |
 
-434 Python tests plus 33 console tests, `ruff` + `mypy --strict` clean, **20/20**
+441 Python tests plus 70 console tests, `ruff` + `mypy --strict` clean, **20/20**
 policy conformance against the deployed endpoint *and* against a plain container, and
 **$0.00** actual AWS spend.
 
@@ -56,7 +56,7 @@ model, and the architecture. `CLAUDE.md` holds the short form of both.
 
 ```bash
 uv sync --all-extras
-uv run pytest                                    # 434 tests, no AWS needed
+uv run pytest                                    # 441 tests, no AWS needed
 uv run guardrail-sim run scenarios/ -v           # policy conformance, offline
 uv run uvicorn guardrail_service.app:app --port 8080
 
@@ -104,6 +104,9 @@ external email **held for review** then approved by a human, internal email
 `apps/console-ui` — React 19 + Vite + TypeScript, served from S3, talking to the control
 plane over HTTPS. Six screens:
 
+Twelve screens in three groups — *Operate*, *Policy*, *Evidence* — because those are
+three different jobs usually done by three different people.
+
 | Page | Answers |
 |---|---|
 | Overview | What an action guardrail is, and what has actually been proven |
@@ -111,6 +114,12 @@ plane over HTTPS. Six screens:
 | Decision Theatre | Send any tool call; see the verdict, the rules, the derived facts |
 | Review Queue | Approve or deny an action held before execution |
 | Audit & Chain | Every decision, and proof none were edited |
+| Policy Studio | Author, validate, publish, activate, roll back — publishing and activating deliberately separate |
+| Change Impact | Which decisions a candidate policy would change, and which would become **permitted** |
+| Playground | Probe any version; find rules that fire for *nothing* |
+| Dry-run & Shadow | Three levels of evaluate-without-enforcing, and a parity run proving they agree |
+| Conformance | The real `scenarios/*.yaml` corpus, run against live AWS from the browser |
+| MCP Proxy | Governing a tool server that knows nothing about Guardrail |
 | System Health | Liveness, readiness, and the free-tier ceilings that shape the design |
 
 **No credential is baked into the bundle** — a deployed frontend is a world-readable

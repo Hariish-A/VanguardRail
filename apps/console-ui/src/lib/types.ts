@@ -229,3 +229,67 @@ export interface ActiveBundleResponse {
   mode: string;
   document: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Policy lifecycle (M7)
+// ---------------------------------------------------------------------------
+
+export interface ValidationResponse {
+  valid: boolean;
+  detail: string;
+  bundle_id: string;
+  rule_count: number;
+  active_rule_count: number;
+  mode: string;
+  content_hash: string;
+  /** True when this expresses the same policy already in force — compared *semantically*,
+   * so key order, omitted defaults, and the version number are not differences. Publishing
+   * v9 after an edit that changed nothing is a strong signal the file being edited is not
+   * the file being deployed. */
+  matches_active: boolean;
+}
+
+export interface VersionDetail {
+  version: number;
+  bundle_id: string;
+  content_hash: string;
+  published_at: string;
+  published_by: string;
+  description: string;
+  document: Record<string, unknown>;
+}
+
+export interface PublishResponse {
+  bundle_id: string;
+  version: number;
+  content_hash: string;
+  published_at: string;
+  published_by: string;
+  activated: boolean;
+  detail: string;
+}
+
+export interface ActivationResponse {
+  bundle_id: string;
+  active_version: number;
+  previous_version: number | null;
+  activated_at: string;
+  activated_by: string;
+  /** `rollback`, `rollforward`, or `unchanged` — named explicitly so a rollback during an
+   * incident is identifiable in the trail without arithmetic. */
+  direction: string;
+}
+
+/** One rule as it appears in a bundle document. Loose on purpose: the console renders
+ *  policy it did not author, and an unknown field must display rather than break. */
+export interface PolicyRule {
+  id: string;
+  description?: string;
+  severity?: string;
+  effect: Effect;
+  message?: string;
+  enabled?: boolean;
+  match?: Record<string, unknown>;
+  hitl?: Record<string, unknown>;
+  [key: string]: unknown;
+}

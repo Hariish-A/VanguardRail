@@ -27,7 +27,7 @@ CI, and by `test_every_data_endpoint_rejects_unauthenticated_requests`.
 | --- | --- |
 | `GET /v1/me` | Who this key is, and what it may do. The console gates its UI on it |
 | `POST /v1/evaluate` | The hot path: evaluate a tool call before it executes |
-| `POST /v1/simulate` | What policy *would* say — writes no audit record, no side effects |
+| `POST /v1/simulate` | What policy *would* say — writes no audit record, no side effects. Accepts a published `version` or an inline candidate `bundle`, which is what makes change-impact analysis possible before publishing |
 | `GET /v1/audit` | Query the audit log (filter by outcome) |
 | `GET /v1/audit/verify` | Verify the hash chain end to end |
 | `GET /v1/decisions` | Human-review queue |

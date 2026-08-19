@@ -83,9 +83,9 @@ committed.
 | M4 | Simulation harness, dry-run, policy versioning | done, verified live |
 | M5 | Hardening, multi-tenancy, MCP proxy, load test | done, verified live |
 | M6 | React console on S3 + `/v1/me` + roles in the UI | done, deployed, verified live |
-| M7 | Policy Studio, change-impact diff, playground, dry-run, conformance, MCP view | not started |
+| M7 | Policy Studio, change-impact diff, playground, dry-run, conformance, MCP view | done, deployed, verified live |
 
-All six milestones are deployed and verified, and the **AWS-hosted agent gap is
+All seven milestones are deployed and verified, and the **AWS-hosted agent gap is
 closed**: `Guardrail-Agent-dev` is a second Lambda running the demo agent against
 Groq, governed over HTTPS by the control-plane Lambda. Ollama remains the default
 for local runs.
@@ -102,7 +102,7 @@ Lambda-hosted agent via cloudflared tunnel (declined), Cognito console sign-in (
 # Quality gate — all four must pass before any commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy packages
-uv run pytest                      # 434 tests
+uv run pytest                      # 441 tests
 
 # The console has its own gate. Node 22; not covered by pytest.
 cd apps/console-ui && npm ci && npm run typecheck && npm test && npm run build
@@ -168,7 +168,9 @@ uv run python -m demo_agent "delete all 500 inactive user accounts"
 # M3 console -- one static HTML file, no build step. Kept as a fallback.
 cd apps/console && python -m http.server 5173 --bind 127.0.0.1
 
-# M6 React console, locally. Port 5173 is already in GUARDRAIL_CONSOLE_ORIGINS.
+# React console, locally. Port 5173 is already in GUARDRAIL_CONSOLE_ORIGINS.
+# `npm run dev/build/test` all regenerate src/generated/scenarios.json from
+# scenarios/*.yaml first, so the console's conformance page cannot drift from CI's.
 cd apps/console-ui && npm run dev
 
 # Build and deploy the console. The URLs are baked in at BUILD time; the key never is.
@@ -236,6 +238,21 @@ uv run python scripts/generate_api_key.py --tenant acme --name "console reviewer
 - The agent Lambda's Function URL needed CORS adding in M6. Without it the browser shows a
   bare network error and there is nothing server-side to explain it — a browser
   deliberately refuses to say whether a request failed on CORS or on the host being down.
+
+**Console (M7)**
+- **The console's scenario corpus is GENERATED, never hand-edited.**
+  `apps/console-ui/src/generated/scenarios.json` comes from `scenarios/*.yaml` via
+  `npm run scenarios`, which every other npm script runs first.
+  `tests/unit/test_console_scenarios.py` fails if the two disagree -- a conformance page
+  built from a stale corpus reports green against scenarios nobody enforces.
+- **`js-yaml` is a runtime dependency for exactly one reason**: `/v1/simulate` takes a
+  parsed `bundle`, so change-impact analysis on an *unpublished* draft requires parsing
+  client side. `validate` and `publish` send raw YAML text and need no parser.
+- Publishing and activating are **separate buttons and always will be**. The API supports
+  `?activate=true`; the console deliberately does not use it. One control that did both
+  would make "save my draft" and "change what every agent may do" the same gesture.
+- Twelve destinations do not fit a horizontal nav. The shell is a grouped sidebar
+  (Operate / Policy / Evidence) above `lg`, and a scrolling strip below it.
 
 **Correctness**
 - **DynamoDB rejects Python floats.** Payloads are stored as *canonical JSON strings* so

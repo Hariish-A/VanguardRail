@@ -36,8 +36,12 @@ import type {
   HealthResponse,
   Identity,
   PolicyListResponse,
+  ActivationResponse,
+  PublishResponse,
   ReadinessResponse,
   SimulateResponse,
+  ValidationResponse,
+  VersionDetail,
   VerifyResponse,
 } from "./types";
 
@@ -257,10 +261,76 @@ export const api = {
       body: JSON.stringify({ approve, reason, reviewer: reviewer || undefined }),
     }),
 
+  /**
+   * Simulate against a *specific* policy — a published version, or an unpublished
+   * candidate supplied inline.
+   *
+   * This is what makes change-impact analysis possible before anything is stored:
+   * reviewing a policy change should not require publishing it first. The server refuses
+   * `version` and `bundle` together, so this does too rather than silently preferring one.
+   */
+  simulateAgainst: (
+    s: Session,
+    action: ActionEnvelopeInput,
+    against: { version?: number; bundle?: Record<string, unknown> } = {},
+  ) => {
+    if (against.version !== undefined && against.bundle !== undefined) {
+      throw new ApiError(
+        0,
+        "Simulate against a published version or an inline candidate, not both.",
+        null,
+        "/v1/simulate",
+      );
+    }
+    return request<SimulateResponse>(s, "/v1/simulate", {
+      method: "POST",
+      body: JSON.stringify({
+        action,
+        ...(against.version !== undefined ? { version: against.version } : {}),
+        ...(against.bundle !== undefined ? { bundle: against.bundle } : {}),
+      }),
+    });
+  },
+
   policies: (s: Session) => request<PolicyListResponse>(s, "/v1/policies"),
 
   activePolicy: (s: Session) =>
     request<ActiveBundleResponse>(s, "/v1/policies/active"),
+
+  policyVersion: (s: Session, version: number) =>
+    request<VersionDetail>(s, `/v1/policies/versions/${version}`),
+
+  /** Lint a bundle without storing it. Open to any authenticated caller — knowing
+   *  whether a draft parses is not a privileged operation. */
+  validatePolicy: (s: Session, body: { bundle?: unknown; yaml?: string }) =>
+    request<ValidationResponse>(s, "/v1/policies/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * Publish a new immutable version. Requires the `admin` role.
+   *
+   * `activate` defaults to false, and the console never sets it on the publish call —
+   * publishing is safe, activating is the deliberate act, and collapsing them into one
+   * button would make "save my draft" and "change what every agent is allowed to do"
+   * the same gesture.
+   */
+  publishPolicy: (
+    s: Session,
+    body: { bundle?: unknown; yaml?: string; description?: string },
+  ) =>
+    request<PublishResponse>(s, "/v1/policies", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Make a version the one in force. Rolling back is this with a lower number —
+   *  there is deliberately no separate rollback path. */
+  activatePolicy: (s: Session, version: number) =>
+    request<ActivationResponse>(s, `/v1/policies/versions/${version}/activate`, {
+      method: "POST",
+    }),
 };
 
 /**
