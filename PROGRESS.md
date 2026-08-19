@@ -810,6 +810,77 @@ is evidence would be an outright false transcript.
 
 ---
 
+## 3.14 Post-M5 — the self-approval defect
+
+Found while designing authentication for a hosted frontend, not while looking for bugs.
+
+### The defect
+
+`/v1/decisions/{id}/resolve` required only a **valid API key** — not a particular one. So
+any key could approve any of its own tenant's held actions, **including the agent's own
+key**.
+
+`require_hitl` means "pause for a human". In practice it meant "pause for anyone holding a
+key", and the agent being paused held one.
+
+Verified against the live deployment before fixing:
+
+```
+agent's action held: 7e765be3
+approving with the AGENT'S OWN key (acme-sim)...
+>>> SELF-APPROVED. status = approved by "the-agent-itself"
+```
+
+The identical argument was already written down for policy administration — *"an agent
+whose key can rewrite the policy governing it is not governed"* — and was simply never
+extended to approval. Reasoning about one privilege correctly does not generalise on its
+own, and `docs/threat-model.md` had asserted a protection that did not exist.
+
+### The fix: roles
+
+| Role | evaluate · simulate · read | resolve | publish policy |
+|---|---|---|---|
+| `agent` *(default)* | yes | **no** | **no** |
+| `reviewer` | yes | yes | **no** |
+| `admin` | yes | yes | yes |
+
+Ordered, so a higher role includes everything below it. **The default is `agent`** — a key
+table entry that forgets to state a role gets the least privilege, and an unrecognised role
+is treated as `agent` so a typo restricts rather than escalates.
+
+`reviewer` is deliberately distinct from `admin`: the person handling day-to-day approvals
+is usually not the person allowed to rewrite the rules, and collapsing them would force
+every reviewer to hold the highest privilege in the system.
+
+`GUARDRAIL_POLICY_ADMIN_KEY_IDS` is kept as an operational break-glass — it can grant admin
+without reissuing a key, and existing deployments rely on it.
+
+### Deployed roles
+
+| Key | Role | Why |
+|---|---|---|
+| `acme-7b6d7d20` | `reviewer` | The M3 console; approving is its job |
+| `acme-sim` | `agent` | Conformance harness **and** the AWS-hosted agent |
+| `acme-policy-admin` | `admin` | Policy changes |
+
+### Verified live after the fix
+
+Re-running the identical attack: **403**, decision still `pending`,
+`allows_execution: false`. An `admin` key then approved it normally, and the chain still
+verifies. The agent still evaluates, simulates, and reads — it simply cannot approve.
+
+### A test that would have passed for the wrong reason
+
+`test_another_tenant_cannot_resolve_a_held_decision` asserts tenant B cannot resolve tenant
+A's decision. After the role change, tenant B's key would have been refused by the **role**
+check before tenancy was ever consulted — so the test would have kept passing while proving
+nothing about isolation. Both tenants in that fixture are now `reviewer`, so the 404 can
+only come from tenant isolation itself.
+
+**413 tests**, up from 400.
+
+---
+
 ## 4. Decisions made in M0, and why
 
 These are the non-obvious ones. Each was a real fork with a real reason.

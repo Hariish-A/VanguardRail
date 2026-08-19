@@ -34,6 +34,34 @@ from guardrail_service.observability import logger
 
 API_KEY_HEADER = "x-api-key"
 
+AGENT = "agent"
+REVIEWER = "reviewer"
+ADMIN = "admin"
+
+ROLES: dict[str, int] = {AGENT: 0, REVIEWER: 1, ADMIN: 2}
+"""What a key may do, ordered so that a higher role includes everything below it.
+
+* `agent`    -- evaluate, simulate, read. **Cannot approve, cannot change policy.**
+* `reviewer` -- the above, plus resolving actions held for human review.
+* `admin`    -- the above, plus publishing and activating policy.
+
+**`agent` is the default**, and that direction matters: a key table entry that forgets to
+state a role gets the least privilege rather than the most.
+
+Roles exist because holding a valid key used to imply the right to *approve*. An agent
+whose action was held for human review could call `/v1/decisions/{id}/resolve` with its own
+key and approve it -- verified against the live deployment, where the AWS-hosted agent
+self-approved an external email that policy had held. `require_hitl` means "pause for a
+human"; without roles it meant "pause for anyone with a key", which includes the agent
+being paused. The same reasoning had already been applied to policy administration and was
+simply never extended to approval.
+"""
+
+
+def role_rank(role: str) -> int:
+    """Unknown roles rank as `agent`, so a typo restricts rather than escalates."""
+    return ROLES.get(role, ROLES[AGENT])
+
 
 @dataclass(frozen=True)
 class AuthenticatedCaller:
@@ -42,6 +70,12 @@ class AuthenticatedCaller:
     key_id: str
     tenant_id: str
     name: str
+    role: str = AGENT
+    """Least privilege by default. See ROLES."""
+
+    def can(self, required: str) -> bool:
+        """Whether this caller holds at least `required`."""
+        return role_rank(self.role) >= role_rank(required)
 
 
 def hash_key(raw_key: str) -> str:
@@ -59,7 +93,11 @@ def _load_key_table() -> dict[str, AuthenticatedCaller]:
 
     Source is `GUARDRAIL_API_KEYS_JSON` (injected by CDK from SSM):
 
-        {"<sha256>": {"key_id": "...", "tenant_id": "...", "name": "..."}}
+        {"<sha256>": {"key_id": "...", "tenant_id": "...", "name": "...",
+                      "role": "agent" | "reviewer" | "admin"}}
+
+    `role` is optional and defaults to `agent`, so an existing key table keeps working and
+    keeps the *least* privilege rather than silently gaining approval rights.
     """
     raw = os.environ.get("GUARDRAIL_API_KEYS_JSON", "").strip()
     if not raw:
@@ -77,10 +115,22 @@ def _load_key_table() -> dict[str, AuthenticatedCaller]:
     for key_hash, meta in parsed.items():
         if not isinstance(meta, dict):
             continue
+        role = str(meta.get("role", AGENT)).strip().lower()
+        if role not in ROLES:
+            # Named explicitly rather than silently downgraded: a typo in a role is a
+            # deployment error, and finding out from a 403 during an incident is worse
+            # than finding out from a log line at start-up.
+            logger.warning(
+                "api_key_unknown_role",
+                extra={"key_id": meta.get("key_id"), "role": role, "applied": AGENT},
+            )
+            role = AGENT
+
         table[key_hash] = AuthenticatedCaller(
             key_id=str(meta.get("key_id", "unknown")),
             tenant_id=str(meta.get("tenant_id", "default")),
             name=str(meta.get("name", "unnamed")),
+            role=role,
         )
     return table
 
@@ -129,7 +179,7 @@ async def require_api_key(
             detail="Invalid API key.",
         )
 
-    logger.append_keys(tenant_id=caller.tenant_id, key_id=caller.key_id)
+    logger.append_keys(tenant_id=caller.tenant_id, key_id=caller.key_id, role=caller.role)
     return caller
 
 
@@ -178,6 +228,39 @@ async def rate_limited_caller(
 RateLimitedCaller = Annotated[AuthenticatedCaller, Depends(rate_limited_caller)]
 
 
+async def require_reviewer(
+    caller: Annotated[AuthenticatedCaller, Depends(require_api_key)],
+) -> AuthenticatedCaller:
+    """Authorise approving or denying an action held for human review.
+
+    **This is what makes `require_hitl` mean anything.** The whole point of holding an
+    action is that a *person* decides. Before roles existed, any valid key could resolve --
+    so an agent could approve the very action its own policy had paused, which was verified
+    against the live deployment and is exactly the control being circumvented.
+
+    Deliberately a distinct permission from `admin`: the person who reviews day-to-day
+    approvals is usually not the person allowed to rewrite policy, and collapsing the two
+    would force every reviewer to hold the highest privilege in the system.
+    """
+    if not caller.can(REVIEWER):
+        logger.warning(
+            "review_denied",
+            extra={"key_id": caller.key_id, "tenant_id": caller.tenant_id, "role": caller.role},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This API key may request evaluations but may not approve or deny actions "
+                "held for human review. Human review is only meaningful if the party being "
+                "reviewed cannot resolve it. Use a key with the 'reviewer' role."
+            ),
+        )
+    return caller
+
+
+ReviewerDependency = Annotated[AuthenticatedCaller, Depends(require_reviewer)]
+
+
 POLICY_ADMIN_ENV = "GUARDRAIL_POLICY_ADMIN_KEY_IDS"
 
 
@@ -214,6 +297,13 @@ async def require_policy_admin(
     M5 replaces this with per-key roles in DynamoDB. The dependency boundary is already
     here, so that change touches one function.
     """
+    # Either source grants it. The role on the key table is the intended mechanism;
+    # the environment list predates roles and is kept as an operational break-glass that
+    # can be changed without reissuing keys. Both are logged, so which one applied is
+    # always answerable.
+    if caller.can(ADMIN):
+        return caller
+
     allowed = _policy_admin_key_ids()
 
     if not allowed:

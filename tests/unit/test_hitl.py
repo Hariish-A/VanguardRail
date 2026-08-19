@@ -41,6 +41,10 @@ def _wire(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
                     "key_id": "test-key",
                     "tenant_id": TENANT,
                     "name": "reviewer-one",
+                    # This suite is about human review, so its key holds the role that
+                    # permits it. Resolving requires `reviewer` -- an agent key approving
+                    # the action its own policy held is the hole roles exist to close.
+                    "role": "reviewer",
                 }
             }
         ),

@@ -42,6 +42,9 @@ Two things follow, and both are limits rather than features:
    [ policy admin ]       highest privilege in the system
 ```
 
+Authorisation is by **role** on the API key: `agent` < `reviewer` < `admin`, defaulting to
+`agent`. A key that states no role gets the least privilege, never the most.
+
 ---
 
 ## Adversaries, and what each can do
@@ -58,7 +61,8 @@ often it submits them.
 | Use a Windows path to dodge a `/` rule | Blocked | The path extractor normalises separators before any rule sees it |
 | Send an unparseable value so no rule matches | Blocked/held | `UNKNOWN` resolves toward the restrictive outcome, never the permissive one |
 | Claim another tenant in the request body | Ignored | Tenant comes from the verified API key, never the body |
-| Publish a policy that permits its own next action | **403** | Policy writes need `require_policy_admin`, a separate permission |
+| Publish a policy that permits its own next action | **403** | Policy writes need the `admin` role |
+| **Approve the action its own policy held for review** | **403** | Resolving needs the `reviewer` role. See below — this was a real defect |
 | Flood the endpoint | 429, then throttled | Per-tenant token bucket; account concurrency quota as the hard ceiling |
 | Retry to get a second bite | Same decision returned | Idempotency key returns the original decision |
 
@@ -73,7 +77,7 @@ therefore the only path to it.
 **Capability:** everything the agent could do, from anywhere.
 
 Contained by: the key is scoped to one tenant; it cannot publish policy; it cannot resolve
-held decisions belonging to others; every action it takes is recorded against its
+held decisions **at all** unless it holds the `reviewer` role; every action it takes is recorded against its
 `key_id`; the per-tenant rate limit bounds the damage rate.
 
 **Residual risk:** keys live in an environment variable and rotation requires a redeploy.
@@ -172,11 +176,33 @@ before deployment, and it is the reason the rate limiter exists.
 
 ---
 
+## A defect this model previously missed
+
+Worth recording, because the threat model itself asserted a protection that did not exist.
+
+`/v1/decisions/{id}/resolve` required only a **valid API key** — not a particular one. So
+any key could approve any of its own tenant's held actions, **including the agent's own
+key**. `require_hitl` means "pause for a human"; in practice it meant "pause for anyone
+holding a key", and the agent being paused held one.
+
+Verified against the live deployment: the AWS-hosted agent had an external email held by
+`external-email-review`, then approved it with its own key. The audit chain recorded
+`reviewer: the-agent-itself`.
+
+The identical argument had already been written down one section over, for policy
+administration — *"an agent whose key can rewrite the policy governing it is not
+governed"* — and simply was never extended to approval. Reasoning about one privilege
+correctly does not generalise on its own.
+
+Closed by the role model. Re-running the same attack now returns **403** with the decision
+still `pending` and `allows_execution: false`.
+
 ## Known gaps, ranked
 
 1. **No external anchoring of the audit chain.** A table-wide writer can rewrite history
    consistently.
 2. **API keys cannot be revoked without a redeploy.** No key store, no revocation list.
+   Roles are carried on the key table, so changing a role is also a redeploy.
 3. **No second-person approval on policy activation**, and bundles are unsigned.
 4. **No WAF or IP reputation filtering** in front of the public endpoint.
 5. **Enforcement depends on the call path.** An agent that bypasses the SDK and the proxy

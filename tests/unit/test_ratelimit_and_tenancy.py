@@ -143,8 +143,22 @@ KEY_B = "tenant-b-key"
 def _wire(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Two tenants, and rate limiting switched ON -- the suite default is off."""
     key_table = {
-        auth.hash_key(KEY_A): {"key_id": "a-1", "tenant_id": "tenant-a", "name": "A"},
-        auth.hash_key(KEY_B): {"key_id": "b-1", "tenant_id": "tenant-b", "name": "B"},
+        # BOTH are reviewers on purpose. If tenant B were an `agent`, the cross-tenant
+        # resolve test below would be refused by the *role* check before tenancy was ever
+        # consulted -- and would pass while proving nothing about tenant isolation.
+        # Giving B the privilege makes the test fail unless isolation genuinely holds.
+        auth.hash_key(KEY_A): {
+            "key_id": "a-1",
+            "tenant_id": "tenant-a",
+            "name": "A",
+            "role": "reviewer",
+        },
+        auth.hash_key(KEY_B): {
+            "key_id": "b-1",
+            "tenant_id": "tenant-b",
+            "name": "B",
+            "role": "reviewer",
+        },
     }
     monkeypatch.setenv("GUARDRAIL_API_KEYS_JSON", json.dumps(key_table))
     monkeypatch.setenv("GUARDRAIL_STAGE", "local")
@@ -272,7 +286,10 @@ def test_another_tenant_cannot_resolve_a_held_decision(client: TestClient) -> No
         headers={"x-api-key": KEY_B},
     )
 
-    assert hijack.status_code == 404
+    # 404, not 403: tenant B genuinely holds the reviewer role, so this is refused by
+    # tenant isolation rather than by the role check. A 403 here would mean the test had
+    # stopped testing what it claims to.
+    assert hijack.status_code == 404, hijack.text
 
     still_pending = client.get(f"/v1/decisions/{decision_id}", headers={"x-api-key": KEY_A}).json()
     assert still_pending["status"] == "pending"

@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, Field
 
-from guardrail_service.auth import AuthenticatedCaller, require_api_key
+from guardrail_service.auth import AuthenticatedCaller, require_api_key, require_reviewer
 from guardrail_service.dependencies import get_audit_repository, get_decision_repository
 from guardrail_service.observability import logger
 from guardrail_service.storage.audit import AuditRecord
@@ -148,7 +148,7 @@ async def get_decision(
     "/{decision_id}/resolve",
     response_model=DecisionView,
     summary="Approve or deny a held action",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_reviewer)],
 )
 async def resolve_decision(
     decision_id: DecisionId,

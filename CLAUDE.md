@@ -32,12 +32,17 @@ user's choice, both still on disk.
    which no code path emits. Implementing those three as written would reach 13 and bill.
 4. **Free LLM only.** Ollama + `qwen3:latest` locally. Bedrock is banned (pay-per-token).
 5. **Every milestone ends deployed and verified against live AWS**, not just tested.
-6. **Reserved concurrency cannot be set on this account.** The total
+6. **Authorisation is by role on the API key**: `agent` < `reviewer` < `admin`,
+   defaulting to **`agent`**. Resolving a held decision needs `reviewer`; publishing
+   policy needs `admin`. Before this existed, any valid key could approve — so an
+   agent could approve the action its own policy held, verified live. Never let the
+   default become anything but the least privilege.
+7. **Reserved concurrency cannot be set on this account.** The total
    `ConcurrentExecutions` quota is **10** and AWS requires 10 to stay unreserved, so
    the maximum reservable value is zero. The account quota is the ceiling instead.
    A **`prod` stage also cannot coexist with `dev`**: another 15/15 would take the
    account to 30 WCU against a free 25.
-7. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
+8. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
    ids allowed to publish or activate policy and defaults to **empty = nobody**. An agent
    whose key can rewrite the policy governing it is not governed. Never make this
    permissive by default. Currently `acme-policy-admin`.
@@ -165,8 +170,10 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   the inner double quotes, the deployed table is unparseable, auth fails closed, and
   **every request returns 401** with nothing in the deploy output explaining why. Cost a
   deploy cycle in M4. `service_stack.py::_api_key_table` now fails the synth and names it.
-- Three keys are deployed: `acme-7b6d7d20` (M3 console), `acme-sim` (conformance,
-  evaluate-only), `acme-policy-admin` (policy changes). Raw values live in `.env` only.
+- Three keys are deployed, now with roles: `acme-7b6d7d20` (console, **reviewer**),
+  `acme-sim` (conformance *and* the AWS agent, **agent**), `acme-policy-admin`
+  (**admin**). Raw values live in `.env` only — and the console key's raw value was
+  never recorded anywhere, by design.
 
 **Correctness**
 - **DynamoDB rejects Python floats.** Payloads are stored as *canonical JSON strings* so
