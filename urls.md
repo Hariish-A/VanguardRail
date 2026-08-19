@@ -25,6 +25,7 @@ CI, and by `test_every_data_endpoint_rejects_unauthenticated_requests`.
 
 | Endpoint | Purpose |
 | --- | --- |
+| `GET /v1/me` | Who this key is, and what it may do. The console gates its UI on it |
 | `POST /v1/evaluate` | The hot path: evaluate a tool call before it executes |
 | `POST /v1/simulate` | What policy *would* say — writes no audit record, no side effects |
 | `GET /v1/audit` | Query the audit log (filter by outcome) |
@@ -37,6 +38,28 @@ CI, and by `test_every_data_endpoint_rejects_unauthenticated_requests`.
 
 Keys live in `.env` (git-ignored). Only SHA-256 hashes are deployed, so the Lambda
 environment discloses no usable credential.
+
+## Review console
+
+**Console URL:** <https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html>
+
+A React application on S3, in the same account. It calls the control plane and the agent
+directly from the browser; both Function URLs list this origin in their CORS allowlist.
+
+| | |
+| --- | --- |
+| Bucket | `guardrail-console-dev-182355603382` |
+| HTTPS endpoint | `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html` |
+| Website endpoint | `http://guardrail-console-dev-182355603382.s3-website-us-east-1.amazonaws.com` |
+
+**Use the HTTPS one.** The website endpoint is shorter and supports an index document, but
+S3 website hosting cannot terminate TLS, so it is HTTP only — and this page takes an API
+key. The console routes with `#/`, so the HTTPS REST endpoint works completely: a hash
+never reaches the server, and deep links and refreshes both resolve with no rewrite rule.
+
+Connect with `GUARDRAIL_CONSOLE_API_KEY` from `.env` (`acme-console-reviewer`, role
+`reviewer`). `GUARDRAIL_API_KEY` also works but is `acme-sim`, role `agent` — it can read
+the review queue and **cannot approve**, which is correct and makes for a dull demo.
 
 ## AWS-hosted agent
 

@@ -7,7 +7,7 @@
 
 **Project:** Guardrail — an action-layer guardrail for AI agents (problem statement PS-3.1).
 **Repository root:** `d:\Official\Projects\Guardrial`
-**Last updated:** end of Milestone 5.
+**Last updated:** end of Milestone 6.
 
 ---
 
@@ -23,6 +23,8 @@
 | Base URL | `https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws` |
 | AWS account / region | `182355603382` / `us-east-1` |
 | Lambda / table | `guardrail-service-dev` / `guardrail-audit-dev` |
+| AWS-hosted agent | `https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws` |
+| Review console | `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html` |
 | Capacity in use | 15 WCU / 15 RCU of the free 25 |
 | Credentials | in `.env` (git-ignored) — never hardcode them into a tracked file |
 
@@ -30,6 +32,8 @@
 
 * Docker Desktop **running** (Lambda bundling needs it; it stops on its own — check
   `docker info` before blaming the code)
+* Node 22 on PATH, for `apps/console-ui` (the console stack refuses to synth without a
+  build)
 * `ollama serve` running with `qwen3:latest`, for the agent only
 * AWS CLI and CDK CLI on PATH — both installed under the user's profile, so a **freshly
   opened terminal** is required for them to resolve
@@ -878,6 +882,158 @@ nothing about isolation. Both tenants in that fixture are now `reviewer`, so the
 only come from tenant isolation itself.
 
 **413 tests**, up from 400.
+
+---
+
+---
+
+## 3.15 Milestone 6 — the review console
+
+**Status: complete, deployed, verified against live AWS.**
+
+Everything before M6 was reachable only through `curl`, the CLI harness, and a
+single-file HTML page from M3. M6 gives the system a face: a React console on AWS that a
+judge can open, connect to with their own key, and drive end to end without anything of
+ours running locally.
+
+### What was built
+
+| | |
+|---|---|
+| `apps/console-ui/` | React 19 + Vite 6 + TypeScript (strict) + Tailwind v4 + framer-motion |
+| Pages | Overview, Agent Console, Decision Theatre, Review Queue, Audit & Chain, System Health, plus a Connect screen |
+| Backend addition | `GET /v1/me` — identity, role, and the caller's capabilities |
+| Infra addition | `infra/stacks/console_stack.py` — S3 static hosting |
+| Tests | 33 console tests (vitest + Testing Library), 12 for `/v1/me`, 9 for the console stack |
+
+### `GET /v1/me`, and the test that makes it worth having
+
+The console gates its controls on a capability list from the server. That creates a new
+way to be wrong — the list can drift from what the endpoints actually enforce — and it
+would drift **quietly**, because nothing else in the suite exercises a capability list.
+
+So `test_capabilities_agree_with_what_the_api_enforces` does not read `_capabilities` at
+all. For every capability the system knows about, it asks the server whether the caller
+has it, then goes and tries it, and fails if the two disagree in **either** direction:
+
+* claimed but refused → the console shows a button that always 403s, and the reviewer
+  concludes the control is broken rather than that they lack the role;
+* not claimed but permitted → the console hides a control the operator actually holds,
+  which during an incident is the more expensive mistake.
+
+A meta-test asserts every verb the endpoint can report has a probe, so adding a capability
+without a probe fails rather than silently reducing coverage — the failure mode this
+repository has now hit four times.
+
+`capabilities` is a flat set of verbs rather than the role name, deliberately. The server
+has a grant the role does not describe: a key with role `agent` named in
+`GUARDRAIL_POLICY_ADMIN_KEY_IDS` really can publish policy, and a client deriving
+permissions from the role string would tell that operator otherwise.
+
+### A gap M6 exposed: the key in `.env` cannot approve
+
+`GUARDRAIL_API_KEY` is `acme-sim`, role `agent`. Connecting the console with it renders
+the review queue **permanently read-only** — correctly, but uselessly for a demo. The M3
+console key `acme-7b6d7d20` is a `reviewer`, but its raw value was never recorded
+anywhere, by design.
+
+So a fourth key was minted: `acme-console-reviewer`, role `reviewer`, in `.env` as
+`GUARDRAIL_CONSOLE_API_KEY`.
+
+Minting it surfaced a second gap. `scripts/generate_api_key.py` predated roles and had no
+`--role` flag, so **every key it minted silently defaulted to `agent`** — right by
+accident, since the default is least privilege, but there was no way to mint a reviewer
+at all. It now takes `--role {agent,reviewer,admin}`, still defaults to `agent`, and says
+so explicitly when it does.
+
+### Deployment: S3, not CloudFront
+
+Same constraint as the service: a new AWS account cannot create a CloudFront distribution
+without a support case. The bucket serves the objects itself, which produces two endpoints
+that are **not** equivalent:
+
+* **REST** — `https://<bucket>.s3.us-east-1.amazonaws.com/index.html`. HTTPS. This is the
+  one to hand out.
+* **Website** — `http://<bucket>.s3-website-us-east-1.amazonaws.com`. Prettier, supports
+  an index document, and **HTTP only** — S3 website hosting cannot terminate TLS.
+
+The console routes with `#/`, so a hash never reaches the server and the REST endpoint
+works completely: deep links and refreshes both resolve with no rewrite rule. An HTTP page
+calling an HTTPS API is permitted (mixed-content blocking runs the other way), but the
+page itself would be tamperable in transit and it takes an API key — so both endpoints are
+emitted and the outputs say which to use.
+
+The bucket blocks public **ACLs** while permitting a public **policy**, so the single
+grant path is the read-only statement CDK declares. `test_the_public_policy_grants_read_only`
+fails if it ever grants more: anyone who could write to this bucket could replace the
+console with their own page, and that page takes a key.
+
+`index.html` is deployed by a second `BucketDeployment` with `no-cache`, because Vite
+fingerprints assets but not `index.html` — one immutable deployment would keep serving the
+previous bundle to every returning browser, which presents as "the deploy did not work".
+
+### Deliberate: no credential is ever in the bundle
+
+Only URLs are baked in at build time. A deployed frontend is a world-readable artifact, so
+CI greps `dist/` for a key-shaped string and fails the build if one appears. The reviewer
+pastes their own key; it lives in `sessionStorage` and is stored **only after `/v1/me`
+accepts it** — persisting an unverified key produces a console that looks connected and is
+not, and every page then renders an empty table that reads as "no activity".
+
+The limitation, stated rather than hidden: an XSS on this page could read the key. Cognito
+hosted sign-in is the designed upgrade and is deferred, not forgotten.
+
+### Bugs found and fixed during M6
+
+**Tailwind v4 dropped the `text-[--css-var]` shorthand.** It compiles to *nothing* — no
+error, no warning, an unstyled element. Every outcome colour in the console used it, so
+the entire decision palette was silently absent from the first build. Caught by grepping
+the built CSS for a class that should exist rather than trusting the build's exit code.
+Colours declared in `@theme` generate real utilities (`text-block`, `bg-hitl`), which is
+what the console now uses.
+
+**The animated headline fragmented its own text.** The word-by-word reveal wrapped each
+word in its own element, so the accessible name of the `<h1>` was one element per word and
+a screen reader — and any text search over the page — saw fragments. The real sentence is
+now exposed once and the animated copy marked `aria-hidden`. Found by a test that could
+not locate the heading by its name, which is exactly what an assistive-tech user would
+have experienced.
+
+**Two URL fields shared a placeholder,** making them indistinguishable to anyone reading
+placeholders rather than labels.
+
+**The agent Lambda's Function URL had no CORS,** so the Agent Console page would have shown
+a bare network error with nothing server-side to explain it — a browser deliberately
+refuses to say whether a request failed on CORS or on the host being unreachable.
+
+**An empty `GUARDRAIL_CONSOLE_ORIGINS` emptied the allowlist.** An unset CI secret expands
+to `""`, and `os.environ.get(name, default)` returns the empty string rather than the
+default — which would have deployed CORS that blocks everything, with nothing at deploy
+time saying so. Both stacks now fall back when the value is empty, not merely absent.
+
+### Verified live
+
+```text
+GET  /v1/me            acme-console-reviewer → role reviewer, 6 capabilities
+POST /v1/evaluate      email.send external   → require_hitl, rule external-email-review
+POST .../resolve       with the AGENT key    → 403
+POST .../resolve       with the REVIEWER key → approved, allows_execution true
+GET  /v1/audit/verify  chain_valid true, 1000 records checked
+OPTIONS /v1/me         preflight from the S3 origin → 200, correct allow-origin
+AWS agent run          db.delete_records blocked, file.read executed,
+                       side-effect ledger contains only the file read
+Conformance            20/20 against the live endpoint
+```
+
+**434 Python tests** (up from 413) and **33 console tests**. AWS spend unchanged at
+**$0.00** — S3 adds the project's only Tier B service, at roughly half a megabyte.
+
+### Deferred to M7
+
+Policy Studio (author and publish a bundle from the browser), change-impact diff, policy
+playground, dry-run and shadow view, the conformance report, and an MCP proxy view. All
+six read or write endpoints that already exist; none needs backend work beyond what is
+built.
 
 ---
 

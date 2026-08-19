@@ -40,6 +40,13 @@ Two things follow, and both are limits rather than features:
 
    [ reviewer ]           semi-trusted: can approve, cannot rewrite policy
    [ policy admin ]       highest privilege in the system
+
+   [ browser ]            runs the console; holds the reviewer's key in sessionStorage
+          │  HTTPS
+          ▼
+   [ S3 bucket ]          public by design: it serves a compiled frontend and nothing
+                          else. Read-only to the world; public ACLs blocked, so the
+                          single grant path is one reviewed bucket policy
 ```
 
 Authorisation is by **role** on the API key: `agent` < `reviewer` < `admin`, defaulting to
@@ -130,7 +137,31 @@ by `test_every_data_endpoint_rejects_unauthenticated_requests`.
 **Residual risk:** the endpoint is reachable and therefore enumerable. Authentication is
 the only barrier, and there is no WAF (AWS WAF costs $5/month per web ACL).
 
-### 6. A hostile policy file
+### 6. An attacker targeting the console
+
+New in M6. The console is a static bundle on a world-readable S3 bucket, and it takes an
+API key from the person using it.
+
+| Attempt | Outcome |
+|---|---|
+| Read the bundle for a credential | Nothing to find. Only URLs are baked in, and CI fails the build if a key-shaped string appears in `dist/` |
+| Replace the console with a page that harvests keys | Requires write access to the bucket. The public statement grants read only, asserted by `test_the_public_policy_grants_read_only`; writing needs IAM |
+| Upload an object with a permissive ACL | Blocked. `BlockPublicAcls` and `IgnorePublicAcls` stay on, so object ACLs cannot widen access beyond the bucket policy |
+| Call the API from a page they control | Refused at preflight. Origins are an explicit allowlist, never `*` — a wildcard with credentials is rejected by browsers and wrong in principle |
+| Persuade the console to show a control the key lacks | The console renders only what `/v1/me` reports, and the server enforces independently on every request. A capability drift is caught by a test that tries every verb |
+
+**Residual risk — the real one.** The key lives in `sessionStorage`, so **an XSS on this
+page reads it**. The bundle has no third-party scripts and no CDN, the CSP surface is one
+origin, and the credential dies with the tab — but that is mitigation, not elimination.
+Cognito hosted sign-in removes the problem properly and is deferred; it needs a user pool,
+an app client, and a callback domain, which buys little while there is one reviewer.
+
+A second, smaller one: the S3 **website** endpoint is HTTP only, because S3 website
+hosting cannot terminate TLS. A page served over plain HTTP is tamperable in transit, and
+this page takes a key. Both endpoints are emitted and the HTTPS REST endpoint is the one
+documented and handed out — but the HTTP one exists and works.
+
+### 7. A hostile policy file
 
 Policy is untrusted input — it may arrive over the API.
 
@@ -147,7 +178,7 @@ Policy is untrusted input — it may arrive over the API.
 **Residual risk:** a catastrophically backtracking regex could be published by a policy
 admin and slow evaluation. There is no regex complexity limit.
 
-### 7. Denial of service
+### 8. Denial of service
 
 The most interesting case, because the correct behaviour looks like an outage.
 
@@ -208,6 +239,10 @@ still `pending` and `allows_execution: false`.
 5. **Enforcement depends on the call path.** An agent that bypasses the SDK and the proxy
    is ungoverned.
 6. **Console authentication is an API key in `sessionStorage`.** Cognito was scoped and
-   deferred; this is acceptable for a single-reviewer demo and not for production.
+   deferred; this is acceptable for a single-reviewer demo and not for production. An XSS
+   on the console page would disclose the reviewer's key.
+7. **The console bucket is publicly readable and served over HTTP as well as HTTPS.**
+   Read-only, holding only a compiled frontend — but the HTTP website endpoint is
+   tamperable in transit, and the page takes a credential.
 
 Items 1–3 are the ones that would matter first in a real deployment.

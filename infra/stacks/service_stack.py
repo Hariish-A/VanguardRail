@@ -164,7 +164,9 @@ ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "false").lower
 # with credentials is both rejected by browsers and wrong in principle.
 CONSOLE_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get("GUARDRAIL_CONSOLE_ORIGINS", "http://localhost:5173").split(",")
+    for origin in (
+        os.environ.get("GUARDRAIL_CONSOLE_ORIGINS", "").strip() or "http://localhost:5173"
+    ).split(",")
     if origin.strip()
 ]
 

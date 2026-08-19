@@ -13,9 +13,15 @@ bundle **before dispatch**, returning `allow`, `log_and_allow`, `require_hitl`, 
 LLM output ──► parse tool_calls ──► [ GUARDRAIL ] ──► execute (or not)
 ```
 
+**Live console:** <https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html>
+
+Open it, paste an API key, and drive the whole system from a browser — run the
+AWS-hosted agent, watch an action be held before it executes, approve it, and verify the
+audit chain. Nothing runs locally.
+
 ## Status
 
-**All five milestones complete, deployed, and verified against live AWS.**
+**All six milestones complete, deployed, and verified against live AWS.**
 
 | | Scope | State |
 |---|---|---|
@@ -25,9 +31,12 @@ LLM output ──► parse tool_calls ──► [ GUARDRAIL ] ──► execute 
 | M3 | Human-in-the-loop workflow + review console | deployed |
 | M4 | Simulation harness, dry run, versioned policy | deployed |
 | M5 | Hardening, multi-tenancy, MCP proxy, load test | deployed |
+| M6 | React console on AWS, roles surfaced in the UI, `/v1/me` | deployed |
+| M7 | Policy Studio, change-impact diff, playground, conformance and MCP views | planned |
 
-391 tests, `ruff` + `mypy --strict` clean, **20/20** policy conformance against the
-deployed endpoint *and* against a plain container, and **$0.00** actual AWS spend.
+434 Python tests plus 33 console tests, `ruff` + `mypy --strict` clean, **20/20**
+policy conformance against the deployed endpoint *and* against a plain container, and
+**$0.00** actual AWS spend.
 
 Measured, not estimated: **6.1 req/s sustained** with zero errors, and a policy engine
 at **p50 4.3 ms / p99 11 ms** — see the [load test report](reports/loadtest.md).
@@ -47,7 +56,7 @@ model, and the architecture. `CLAUDE.md` holds the short form of both.
 
 ```bash
 uv sync --all-extras
-uv run pytest                                    # 391 tests, no AWS needed
+uv run pytest                                    # 434 tests, no AWS needed
 uv run guardrail-sim run scenarios/ -v           # policy conformance, offline
 uv run uvicorn guardrail_service.app:app --port 8080
 
@@ -90,6 +99,35 @@ All four outcomes verified live from AWS: bulk delete **blocked** (nothing execu
 external email **held for review** then approved by a human, internal email
 **allowed**, confidential read **logged and allowed**.
 
+## The console
+
+`apps/console-ui` — React 19 + Vite + TypeScript, served from S3, talking to the control
+plane over HTTPS. Six screens:
+
+| Page | Answers |
+|---|---|
+| Overview | What an action guardrail is, and what has actually been proven |
+| Agent Console | Runs the AWS-hosted agent and shows the governed transcript |
+| Decision Theatre | Send any tool call; see the verdict, the rules, the derived facts |
+| Review Queue | Approve or deny an action held before execution |
+| Audit & Chain | Every decision, and proof none were edited |
+| System Health | Liveness, readiness, and the free-tier ceilings that shape the design |
+
+**No credential is baked into the bundle** — a deployed frontend is a world-readable
+artifact, and CI fails the build if a key-shaped string appears in it. The reviewer pastes
+their own key; it is verified against `/v1/me` before it is stored, and held only in
+`sessionStorage`.
+
+What the console renders is decided by the **server**. `/v1/me` returns the caller's
+capabilities, and a test asks the server what a key may do and then goes and tries every
+verb, failing if the two disagree in either direction. A key with the `agent` role can see
+the review queue and cannot act on it — because an agent that can approve the action its
+own policy held has not been governed.
+
+```bash
+cd apps/console-ui && npm ci && npm run dev    # http://localhost:5173
+```
+
 ## Governing a tool server that knows nothing about Guardrail
 
 `guardrail-mcp` proxies any MCP server and enforces policy on every `tools/call`, with
@@ -123,8 +161,12 @@ for human review with the file untouched on disk.
 
 ## Stack
 
-Python 3.12 · FastAPI · Mangum · AWS Lambda (arm64) · Lambda Function URL · DynamoDB
-(provisioned) · AWS CDK · Ollama Qwen3 · uv · ruff · mypy strict · pytest · hypothesis
+**Control plane** — Python 3.12 · FastAPI · Mangum · AWS Lambda (arm64) · Lambda
+Function URL · DynamoDB (provisioned) · AWS CDK · Ollama Qwen3 / Groq · uv · ruff · mypy
+strict · pytest · hypothesis
+
+**Console** — React 19 · Vite 6 · TypeScript strict · Tailwind v4 · framer-motion ·
+vitest + Testing Library · S3 static hosting
 
 Also included: an MCP guardrail proxy, LangChain and OpenAI-compatible adapters, a
 scenario conformance harness, and a threat model — see [docs/](docs/).

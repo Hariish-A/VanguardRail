@@ -23,7 +23,8 @@ made, see `PROGRESS.md`.
 13. [Hardening: limits, failure, and cost](#13-hardening-limits-failure-and-cost)
 14. [Repository layout](#14-repository-layout)
 15. [Running it](#15-running-it)
-16. [Roadmap](#16-roadmap)
+16. [The review console](#16-the-review-console)
+17. [Roadmap](#17-roadmap)
 
 ---
 
@@ -266,12 +267,29 @@ The SDK builds the action envelope and POSTs it to `/v1/evaluate`.
 ### Step 2 — Edge
 
 ```
-SDK ──HTTPS──► CloudFront ──SigV4 (OAC)──► Lambda Function URL ──► Lambda
+SDK ──HTTPS──► Lambda Function URL ──► Lambda
 ```
 
-CloudFront forwards everything except `Host`, with caching **disabled** — a cached policy
-decision is a wrong decision. The Function URL uses `AWS_IAM` auth, so only CloudFront can
-invoke it; the raw URL returns 403 to the internet.
+**As deployed there is no CloudFront.** A new AWS account cannot create a distribution
+without a support case, and the project could not wait on a support queue. So the Function
+URL is the edge, with `authType: NONE`, and **authentication is the control** — a hashed
+API key compared in constant time inside the application, on every non-health route.
+
+That is a weaker posture than the designed one, and it is worth being precise about how.
+Hiding the origin was defence in depth; it was never the actual control. What is lost is
+edge filtering and the ability to reject an unauthenticated request before it reaches
+compute. What is kept — and is testable, which the CloudFront version was not — is that
+every data route rejects an unauthenticated caller, asserted on every deploy by
+`test_every_data_endpoint_rejects_unauthenticated_requests`.
+
+CloudFront remains wired and optional: `GUARDRAIL_ENABLE_CLOUDFRONT=true` switches the
+Function URL to `AWS_IAM` and puts an Origin Access Control in front of it, at which point
+the raw URL returns 403 to everyone but the distribution.
+
+Browser callers get one more thing here: the Function URL answers CORS preflight itself,
+so the `OPTIONS` round trip never pays a Lambda cold start. The allowlist is explicit
+origins, never `*` — these requests carry credentials, and a wildcard origin with
+credentials is both rejected by browsers and wrong in principle.
 
 ### Step 3 — Request context
 
@@ -475,16 +493,14 @@ inference. That path is documented as demo-only.
 ### 9.1 Deployed shape
 
 ```
-                            ┌──────────────────┐
-   Reviewer ───────────────►│                  │
-                            │   CloudFront     │  1 TB/mo always free
-   Agent + SDK ────────────►│   distribution   │  caching disabled
-                            └────────┬─────────┘
-                                     │ OAC signs SigV4
-                                     ▼
-                            ┌──────────────────┐
-                            │ Lambda Function  │  AWS_IAM auth
-                            │       URL        │  403 to everyone but CloudFront
+   Reviewer ──► S3 static site      guardrail-console-dev-<account>
+                (React console)     HTTPS via the REST endpoint, hash routing
+                       │
+                       │ x-api-key, pasted by the reviewer
+                       ▼
+   Agent + SDK ───────────────────► ┌──────────────────┐
+   AWS-hosted agent Lambda ───────► │ Lambda Function  │  authType NONE
+   MCP proxy ─────────────────────► │       URL        │  auth is in the application
                             └────────┬─────────┘
                                      ▼
                             ┌──────────────────┐
@@ -504,7 +520,8 @@ inference. That path is documented as demo-only.
       S3 audit archive ──► SNS ──► reviewer notification
 ```
 
-*(DynamoDB, S3, and SNS arrive in M1–M3; M0 deploys the compute and edge.)*
+*(DynamoDB and SNS arrive in M1–M3; M0 deploys the compute and edge; the console
+bucket arrives in M6. CloudFront is designed in and disabled — see step 2 of §4.)*
 
 ### 9.2 Why each service
 
@@ -513,7 +530,7 @@ inference. That path is documented as demo-only.
 | **Lambda** (arm64) | Scales to zero; arm64 is cheaper per GB-s and the free tier is denominated in GB-s | 1M req + 400k GB-s/mo, forever |
 | **Function URL** | API Gateway's free tier expires after 12 months, then $1/million; this never charges. Also the whole edge -- CloudFront is optional | $0, forever |
 | **CloudFront** | *Optional.* New AWS accounts cannot create distributions without a support case, so the architecture does not depend on it. Enable with `GUARDRAIL_ENABLE_CLOUDFRONT=true` for edge caching and a custom domain | 1 TB + 10M req/mo, forever |
-| **GitHub Pages** | Hosts the M3 console: free, HTTPS, no AWS verification. S3 website hosting is HTTP-only, which breaks Cognito | free for public repos |
+| **S3 static hosting** | Serves the M6 React console. Its **REST** endpoint is HTTPS, which is what the console is handed out on; the *website* endpoint is HTTP-only and is emitted only as a convenience. The console routes with `#/`, so no server-side rewrite is needed for deep links | 5 GB for 12 months, then ~$0.001/mo at this size |
 | **DynamoDB** | Conditional writes give race-free HITL resolution; single-digit-ms reads | 25 GB + 25 WCU/RCU **provisioned** |
 | **CloudWatch** | Logs Insights carries the fine-grained analysis the metric budget cannot | 5 GB logs, 10 metrics, 10 alarms |
 | **Cognito** | Console auth without building password handling | 10,000 MAU, never expires |
@@ -908,7 +925,15 @@ packages/guardrail-service/   FastAPI control plane.
 
 packages/guardrail-sdk/       Client, @governed_tool, circuit breaker, blocking HITL wait
 packages/guardrail-sim/       Scenario DSL, runner, change-impact diffing, evidence reports
-apps/console/                 Review console (single self-contained HTML file)
+apps/console/                 M3 review console (single self-contained HTML file).
+                              Kept as a zero-dependency fallback: it needs no build step
+                              and runs straight off disk.
+apps/console-ui/              M6 React console, deployed to S3
+  src/lib/api.ts              Typed client, session handling, honest error surfacing
+  src/lib/store.tsx           Session state, capability gating, hash routing
+  src/components/             shadcn-shaped primitives + Aceternity-style effects
+  src/pages/                  The six screens
+  src/__tests__/              Behavioural tests, incl. the permission gate
 apps/demo-agent/              Qwen3-powered agent with five governed tools
 
 infra/                        AWS CDK (Python)
@@ -966,7 +991,78 @@ See **`PROGRESS.md` §7** for the full prerequisite list and commands.
 
 ---
 
-## 16. Roadmap
+## 16. The review console
+
+`apps/console-ui` — React 19 + Vite + TypeScript, deployed to S3 and talking to the
+control plane over HTTPS. It is the human surface of everything in this document.
+
+### What each page is for
+
+| Page | Answers |
+|---|---|
+| **Overview** | What an action guardrail is, how it differs from a text guardrail, and what has actually been proven. Readable without a credential — it is what a first-time reader lands on |
+| **Agent Console** | Runs the AWS-hosted agent against a live model and shows the governed transcript: every tool it tried, the rule that fired, and the audit sequence number the decision landed at |
+| **Decision Theatre** | Sends any tool call to `/v1/evaluate` or `/v1/simulate` and shows the verdict, every matching rule, the derived facts, and the latency |
+| **Review Queue** | The HITL surface: approve or deny an action held before execution, with a reason, under a live countdown to the timeout |
+| **Audit & Chain** | Every decision, and the chain verdict from `/v1/audit/verify` — with the chain's limits stated on the page rather than buried in a document |
+| **System Health** | `/healthz`, `/readyz`, the policy in force, and the free-tier ceilings that shape the design |
+
+### The side-effect ledger
+
+The Agent Console renders what the tools *actually did*, from the agent's own ledger.
+Without it, "blocked" is a claim the agent makes about itself. With it, "blocked" is
+checkable against "nothing happened" — which is the difference between a demo and
+evidence.
+
+### `/v1/me`, and why a UI needs it
+
+The console asks the server what the presented key may do, and renders only that.
+Guessing gets it wrong in one of two ways: guess too permissive and it shows an Approve
+button that always 403s, teaching the reviewer that the control is broken rather than that
+they lack the role; guess too restrictive and it hides a control the operator legitimately
+holds, which during an incident is the more expensive mistake.
+
+`capabilities` is a flat set of verbs rather than the role name, because the server has a
+grant the role does not describe: a key with the `agent` role named in
+`GUARDRAIL_POLICY_ADMIN_KEY_IDS` really can publish policy. A client deriving permissions
+from the role string alone would tell that operator they cannot do the thing they can.
+
+The list is kept honest by `test_capabilities_agree_with_what_the_api_enforces`, which
+does not read the capability function at all: it asks the server what the caller may do,
+then goes and tries every verb, and fails if the two disagree **in either direction**.
+
+### Authentication, stated plainly
+
+The reviewer pastes their own API key. It is held in `sessionStorage`, sent as
+`x-api-key`, and **stored only after `/v1/me` accepts it** — persisting an unverified key
+produces a console that looks connected and is not, and every page then renders an empty
+table that reads as "no activity" rather than "you are not authenticated".
+
+No credential is ever baked into the bundle. Only URLs are, and CI fails the build if a
+key-shaped string appears in `dist/`, because a deployed frontend is a world-readable
+artifact.
+
+The honest limitation: an XSS on this page could read the key. Cognito hosted sign-in is
+the designed upgrade and is deferred rather than forgotten — see `docs/threat-model.md`,
+gap 6.
+
+### Why not build the components from a registry
+
+The visual language borrows the Aceternity UI patterns (aurora, spotlight, meteors,
+glowing borders, word-by-word text reveal) and the shadcn/ui component shape, both
+rewritten in `src/components/`. Each is a handful of divs and a keyframe, and the console
+must build with no network access and no CDN: the deployed page is fully self-contained,
+which matters for a security tool whose bundle is public.
+
+Every ambient effect is `aria-hidden` and conveys nothing that is not also written in
+text, all animation stops under `prefers-reduced-motion`, and the four outcomes are never
+distinguished by colour alone — each badge carries its word, `block` is filled where
+`allow` is outlined, and `require_hitl` pulses because it is the one outcome that is not
+yet settled.
+
+---
+
+## 17. Roadmap
 
 | Milestone | Delivers | Exit criterion |
 |---|---|---|
@@ -976,6 +1072,8 @@ See **`PROGRESS.md` §7** for the full prerequisite list and commands.
 | **M3** ✅ | HITL workflow + review console | Agent pauses; reviewer approves in a browser; agent resumes. Deny and timeout paths both shown |
 | **M4** ✅ | Simulation harness, dry-run, policy versioning | Green conformance report against prod; dry run executes nothing; a new bundle version changes behaviour with no redeploy |
 | **M5** ✅ | Hardening, multi-tenancy, MCP proxy, load test | MCP proxy governs an off-the-shelf MCP server that knows nothing about Guardrail |
+| **M6** ✅ | React console on AWS: overview, agent console, decision theatre, review queue, audit chain, system health, plus `/v1/me` | A judge opens an HTTPS URL, pastes a key, runs the AWS-hosted agent, watches an action be held, and approves it — with no laptop of ours involved |
+| **M7** | Policy Studio, change-impact diff, policy playground, dry-run and shadow, conformance report, MCP proxy view | Publishing and rolling back a bundle from the browser changes live behaviour, with the impact shown before it is applied |
 
 ### On the bonus requirement
 

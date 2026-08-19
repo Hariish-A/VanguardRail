@@ -1,0 +1,175 @@
+@import "tailwindcss";
+
+/*
+  Design tokens.
+
+  The palette is built around the four policy outcomes, because they are the only thing
+  in this product a reader must never misread. Each has a hue that survives a projector
+  and a colour-blind viewer's red/green confusion: block is red *and* filled, hitl is
+  amber *and* pulsing, allow is green *and* outlined, log_and_allow is blue *and* dashed.
+  Colour is never the only signal — every badge also carries its word.
+*/
+@theme {
+  --color-ink-950: #06070c;
+  --color-ink-900: #0a0c13;
+  --color-ink-850: #0e1119;
+  --color-ink-800: #131722;
+  --color-ink-750: #1a1f2d;
+  --color-ink-700: #232937;
+  --color-ink-600: #313849;
+  --color-ink-500: #4a536a;
+  --color-ink-400: #6b7590;
+  --color-ink-300: #97a0b8;
+  --color-ink-200: #c3cadb;
+  --color-ink-100: #e6eaf3;
+
+  --color-brand-400: #7ba7ff;
+  --color-brand-500: #5b8def;
+  --color-brand-600: #3f6fd8;
+
+  --color-block: #f2555a;
+  --color-hitl: #f5a524;
+  --color-allow: #3ecf8e;
+  --color-log: #56b6e0;
+
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --animate-aurora: aurora 22s linear infinite;
+  --animate-shimmer: shimmer 2.4s linear infinite;
+  --animate-pulse-ring: pulse-ring 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-meteor: meteor 6s linear infinite;
+  --animate-grid-flow: grid-flow 28s linear infinite;
+}
+
+@keyframes aurora {
+  0% {
+    background-position: 0% 50%;
+    transform: rotate(0deg);
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 0.85;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes meteor {
+  0% {
+    transform: rotate(215deg) translateX(0);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(215deg) translateX(-520px);
+    opacity: 0;
+  }
+}
+
+@keyframes grid-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 -1600px;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-brand-500) 42%, transparent);
+}
+
+/* A visible focus ring everywhere. A governance console is operated under time
+   pressure, and keyboard users must never lose their place. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-400);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-700);
+  border-radius: 8px;
+  border: 2px solid var(--color-ink-950);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-600);
+}
+
+/* Respect the setting. Several backgrounds here animate continuously, which is
+   genuinely unpleasant for anyone with vestibular sensitivity. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@utility glass {
+  background: color-mix(in oklab, var(--color-ink-850) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid color-mix(in oklab, var(--color-ink-600) 60%, transparent);
+}
+
+@utility text-gradient {
+  background: linear-gradient(
+    100deg,
+    var(--color-ink-100) 10%,
+    var(--color-brand-400) 48%,
+    var(--color-ink-100) 88%
+  );
+  background-size: 200% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}

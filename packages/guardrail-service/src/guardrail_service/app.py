@@ -22,7 +22,15 @@ from pydantic import BaseModel
 from guardrail_service import __version__
 from guardrail_service.config import get_settings
 from guardrail_service.observability import logger
-from guardrail_service.routers import audit, decisions, evaluate, health, policies, simulate
+from guardrail_service.routers import (
+    audit,
+    decisions,
+    evaluate,
+    health,
+    me,
+    policies,
+    simulate,
+)
 
 REQUEST_ID_HEADER = "x-request-id"
 
@@ -122,6 +130,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(me.router)
     app.include_router(evaluate.router)
     app.include_router(audit.router)
     app.include_router(decisions.router)

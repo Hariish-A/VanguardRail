@@ -83,6 +83,52 @@ jobs:
           path: reports/
           retention-days: 14
 
+  console:
+    name: Console (types, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/console-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/console-ui/package-lock.json
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      # The load-bearing one asserts the console does not render an Approve button for a
+      # key whose role cannot approve. The server refuses that regardless; this is about
+      # the UI not claiming an ability the key lacks -- which is the exact shape of the
+      # defect this system shipped once already.
+      - name: Console tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # A build that produced no bundle would still exit 0 and then deploy an empty
+      # bucket. Assert the artifact exists rather than trusting the exit code.
+      - name: Assert the bundle exists
+        run: test -f dist/index.html && test -d dist/assets
+
+      # The bundle is a public artifact. Baking a credential into it would publish it,
+      # so this fails the build rather than leaving it to review.
+      - name: Assert no credential was bundled
+        run: |
+          if grep -rEq 'gr_[A-Za-z0-9_-]{40,}' dist/; then
+            echo "A key-shaped string is present in the built console." >&2
+            echo "Only URLs may be baked in -- the bundle is world-readable." >&2
+            exit 1
+          fi
+          echo "no credential found in dist/"
+
   portability:
     name: Portability (container runs the same suite)
     runs-on: ubuntu-latest
@@ -135,7 +181,7 @@ jobs:
 
   deploy:
     name: Deploy to dev
-    needs: [quality, cost-gate, portability]
+    needs: [quality, console, cost-gate, portability]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: dev
@@ -160,6 +206,23 @@ jobs:
           aws-region: us-east-1
           role-session-name: guardrail-ci-${{ github.run_id }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/console-ui/package-lock.json
+
+      # ConsoleStack refuses to synth without a build rather than publishing an empty
+      # bucket, so this has to happen before cdk runs. Only URLs are baked in; the
+      # reviewer still pastes their own key, because the bundle is world-readable.
+      - name: Build the console
+        working-directory: apps/console-ui
+        env:
+          VITE_GUARDRAIL_BASE_URL: ${{ secrets.GUARDRAIL_CONSOLE_BASE_URL }}
+          VITE_GUARDRAIL_AGENT_URL: ${{ secrets.GUARDRAIL_CONSOLE_AGENT_URL }}
+          VITE_GUARDRAIL_VERSION: ${{ github.sha }}
+        run: npm ci && npm run build
+
       - name: Install CDK CLI
         run: npm install --global aws-cdk@2
 
@@ -172,6 +235,11 @@ jobs:
           GUARDRAIL_API_KEYS_JSON: ${{ secrets.GUARDRAIL_API_KEYS_JSON }}
           # Empty unless the secret is set, which leaves policy administration closed.
           GUARDRAIL_POLICY_ADMIN_KEY_IDS: ${{ secrets.GUARDRAIL_POLICY_ADMIN_KEY_IDS }}
+          GUARDRAIL_AGENT_TARGET_URL: ${{ secrets.GUARDRAIL_AGENT_TARGET_URL }}
+          GUARDRAIL_DEPLOY_CONSOLE: "1"
+          # Falls back to localhost when unset, rather than deploying an empty allowlist
+          # that would make every console request fail with no server-side trace.
+          GUARDRAIL_CONSOLE_ORIGINS: ${{ secrets.GUARDRAIL_CONSOLE_ORIGINS }}
         run: cdk deploy --all --require-approval never --outputs-file outputs.json
 
       - name: Smoke test the deployment

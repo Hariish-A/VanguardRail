@@ -263,3 +263,74 @@ support request rather than a code change.
   as a gap in the threat model.
 
 **Cost.** Named in [`threat-model.md`](threat-model.md) rather than left implicit.
+
+---
+
+## ADR-019 — The console is served from S3, not CloudFront
+
+**Decision.** Deploy `apps/console-ui` to a public-read S3 bucket and hand out the
+**REST** endpoint (`https://<bucket>.s3.<region>.amazonaws.com/index.html`).
+
+**Why.** CloudFront in front of a private bucket is the textbook answer and is what this
+project would use if it could. The same constraint that removed CloudFront from the
+service applies: a new AWS account cannot create a distribution without a support case.
+
+S3 gives two endpoints, and they are not equivalent. The *website* endpoint is prettier
+and supports an index document, but **cannot terminate TLS** — S3 website hosting is HTTP
+only. The *REST* endpoint is HTTPS. Since the console routes with `#/`, a hash never
+reaches the server, so the REST endpoint needs no index-document rewrite: deep links and
+refreshes both resolve from the single `index.html`. HTTPS therefore costs nothing.
+
+**Cost.** S3 is the project's only Tier B service — 5 GB free for 12 months, then about
+$0.023/GB. At roughly half a megabyte that is a fraction of a cent per month. The website
+endpoint still exists and is still HTTP; it is emitted as a convenience and documented as
+the one *not* to use.
+
+---
+
+## ADR-020 — The console asks the server what it may do
+
+**Decision.** Add `GET /v1/me`, returning the caller's identity and a flat list of
+**capability verbs**. The console renders only what that list permits.
+
+**Why.** A UI that infers permissions gets them wrong in one of two ways, and both are
+bad. Too permissive renders an Approve button that always 403s, teaching the reviewer the
+control is broken rather than that they lack the role. Too restrictive hides a control the
+operator legitimately holds — during an incident, the more expensive mistake.
+
+Verbs rather than the role name, because the server has a grant the role does not
+describe: a key with the `agent` role named in `GUARDRAIL_POLICY_ADMIN_KEY_IDS` really can
+publish policy. A client deriving permissions from the role string alone would tell that
+operator otherwise.
+
+**Cost.** A second source of truth about authorisation, which can drift from the
+dependencies that enforce it. Contained by
+`test_capabilities_agree_with_what_the_api_enforces`, which does not read the capability
+function: it asks the server what a caller may do, then tries every verb, and fails if the
+two disagree **in either direction**. A meta-test requires every reported verb to have a
+probe, so adding a capability without one fails rather than silently reducing coverage.
+
+**This does not weaken enforcement.** The server decides on every request regardless. The
+capability list changes what is worth rendering, never what is permitted.
+
+---
+
+## ADR-021 — Console components are owned in-repo, not installed
+
+**Decision.** Rewrite the Aceternity UI effects and the shadcn/ui primitives directly in
+`apps/console-ui/src/components/` rather than pulling them from a registry or a CDN.
+
+**Why.** The deployed page must be fully self-contained: no CDN script, no external
+stylesheet, no runtime fetch to a third party. For a security tool whose bundle is
+world-readable and whose page accepts a credential, every external origin is a supply
+chain and an injection surface. Each component is also small — a handful of divs and a
+keyframe — so the cost of owning them is a file that can be read in full.
+
+**Cost.** Upstream fixes are not inherited. Accepted: these are presentational, they do
+not parse untrusted input, and the alternative is trusting a script origin on the page
+that holds the reviewer's key.
+
+**Constraint this imposes.** All animation is `aria-hidden` and decorative, all of it
+stops under `prefers-reduced-motion`, and the four outcomes are never distinguished by
+colour alone — each badge carries its word, `block` is filled where `allow` is outlined,
+and `require_hitl` pulses because it is the one outcome not yet settled.

@@ -38,6 +38,17 @@ from constructs import Construct
 # httpx for both the LLM call and the guardrail call; pydantic for the SDK's typed
 # decision models. Deliberately nothing else -- no FastAPI, no boto3 (the runtime
 # provides it, and this function touches no AWS service directly anyway).
+# Browser origins permitted to invoke the agent. Shares the variable with the service
+# stack deliberately: the console calls both, and two allowlists that had to be kept in
+# step by hand would drift, with the failure showing up as an unexplained CORS error.
+CONSOLE_ORIGINS = [
+    origin.strip()
+    for origin in (
+        os.environ.get("GUARDRAIL_CONSOLE_ORIGINS", "").strip() or "http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
+
 AGENT_DEPENDENCIES = ["httpx>=0.27", "pydantic>=2.9"]
 
 _LAYER_BUILD = f"""
@@ -132,8 +143,24 @@ class AgentStack(Stack):
         # direct table access would make this a privileged insider rather than a
         # demonstration that an ordinary AWS-hosted agent can be governed.
 
+        # CORS so the React console can drive the agent from a browser. Without it the
+        # preflight fails and the Agent Console page shows a bare network error, with
+        # nothing server-side to explain it -- a browser deliberately refuses to say
+        # whether a request was blocked by CORS or by the host being unreachable.
+        #
+        # Not "*": the POST carries a key, and a wildcard origin with credentials is both
+        # rejected by browsers and wrong in principle.
         self.function_url = self.function.add_function_url(
             auth_type=lambda_.FunctionUrlAuthType.NONE,
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=CONSOLE_ORIGINS,
+                # OPTIONS is absent on purpose: Function URLs answer preflight themselves
+                # and reject it as an enum value here.
+                allowed_methods=[lambda_.HttpMethod.GET, lambda_.HttpMethod.POST],
+                allowed_headers=["content-type", "x-api-key", "x-request-id"],
+                allow_credentials=True,
+                max_age=Duration.hours(1),
+            ),
         )
 
         self._create_outputs()

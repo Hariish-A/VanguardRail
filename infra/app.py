@@ -13,6 +13,8 @@ Configuration comes from the environment so the same command works locally and i
     GUARDRAIL_ALERT_EMAIL address for the cost alarm; the budget stack is skipped without it
     GUARDRAIL_AGENT_TARGET_URL  control-plane URL the agent is governed by; the agent
                                stack is skipped without it
+    GUARDRAIL_DEPLOY_CONSOLE    set to 1 to deploy the React console to S3; skipped
+                               otherwise, since it needs apps/console-ui to be built
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import os
 import aws_cdk as cdk
 from stacks.agent_stack import AgentStack
 from stacks.budget_stack import BudgetStack
+from stacks.console_stack import ConsoleStack
 from stacks.service_stack import ServiceStack
 
 # Pinned explicitly so `python app.py` writes somewhere predictable. Without this,
@@ -69,6 +72,21 @@ if agent_target:
         description=(
             f"Guardrail demo agent ({stage}) -- an AWS-hosted agent governed by the "
             "AWS-hosted control plane."
+        ),
+    )
+
+# The React review console, on S3. Opt-in because it requires apps/console-ui/dist to
+# exist -- a `cdk deploy --all` on a machine that has not run the frontend build should
+# say so rather than publish an empty bucket.
+if os.environ.get("GUARDRAIL_DEPLOY_CONSOLE", "").lower() in {"1", "true", "yes"}:
+    ConsoleStack(
+        app,
+        f"Guardrail-Console-{stage}",
+        stage=stage,
+        env=env,
+        description=(
+            f"Guardrail review console ({stage}) -- static React app on S3, talking to "
+            "the control plane over HTTPS with an operator-supplied API key."
         ),
     )
 

@@ -12,9 +12,10 @@ dependencies = [
 
 [tool.uv.workspace]
 members = ["packages/*", "infra", "apps/*"]
-# The review console is a single static HTML file, not a Python package -- it has no
-# build step and no dependencies by design.
-exclude = ["apps/console"]
+# Neither console is a Python package. `apps/console` is the single static HTML file
+# from M3, kept as a zero-dependency fallback; `apps/console-ui` is the React build,
+# which has its own npm toolchain and is tested by `npm test` rather than pytest.
+exclude = ["apps/console", "apps/console-ui"]
 
 [tool.uv.sources]
 guardrail-core = { workspace = true }
@@ -50,7 +51,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["infra/cdk.out"]
+extend-exclude = ["infra/cdk.out", "apps/console-ui"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "S"]
@@ -75,7 +76,7 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 plugins = ["pydantic.mypy"]
-exclude = ["infra/cdk.out", "build", "dist"]
+exclude = ["infra/cdk.out", "build", "dist", "apps/console-ui"]
 
 [[tool.mypy.overrides]]
 # LangChain is an OPTIONAL integration: the SDK is installed by agent teams who should

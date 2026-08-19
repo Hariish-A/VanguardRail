@@ -7,8 +7,9 @@ decision.
 
 This file is loaded automatically each session. It holds the things that are expensive to
 rediscover. Depth lives in `PROGRESS.md` (status, decisions, bugs) and
-`Project Documentation.md` (concepts, pipeline, architecture) — both git-ignored by the
-user's choice, both still on disk.
+`Project Documentation.md` (concepts, pipeline, architecture). Both were git-ignored
+originally and are now **tracked** — they were scanned for credentials before being
+committed.
 
 ---
 
@@ -42,7 +43,14 @@ user's choice, both still on disk.
    the maximum reservable value is zero. The account quota is the ceiling instead.
    A **`prod` stage also cannot coexist with `dev`**: another 15/15 would take the
    account to 30 WCU against a free 25.
-8. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
+8. **Browser origins are an explicit allowlist, never `*`.**
+   `GUARDRAIL_CONSOLE_ORIGINS` is read by **both** the service and agent stacks and must
+   match the `Origin` header verbatim, scheme included — console requests carry
+   credentials, and a wildcard origin with credentials is rejected by browsers anyway. An
+   *empty* value falls back to localhost rather than deploying an empty allowlist: an
+   unset CI secret expands to `""`, which would otherwise ship CORS that blocks
+   everything, with nothing at deploy time saying so.
+9. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
    ids allowed to publish or activate policy and defaults to **empty = nobody**. An agent
    whose key can rewrite the policy governing it is not governed. Never make this
    permissive by default. Currently `acme-policy-admin`.
@@ -52,7 +60,13 @@ user's choice, both still on disk.
 - AWS account `182355603382`, region **us-east-1** (not negotiable — CloudFront needs it)
 - Live base URL: `https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws`
 - AWS-hosted agent: `https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws`
-- Function `guardrail-service-dev`, table `guardrail-audit-dev`
+- **Review console (M6):**
+  `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html`
+  HTTPS via the S3 *REST* endpoint. The *website* endpoint
+  (`http://…s3-website-us-east-1.amazonaws.com`) is HTTP only — S3 website hosting cannot
+  terminate TLS — so hand out the REST one.
+- Function `guardrail-service-dev`, table `guardrail-audit-dev`,
+  console bucket `guardrail-console-dev-182355603382`
 - **Credentials live in `.env` (git-ignored). Read them from there — never hardcode a key
   into a committed file.**
 
@@ -66,8 +80,10 @@ user's choice, both still on disk.
 | M3 | HITL workflow + review console | done, deployed |
 | M4 | Simulation harness, dry-run, policy versioning | done, verified live |
 | M5 | Hardening, multi-tenancy, MCP proxy, load test | done, verified live |
+| M6 | React console on S3 + `/v1/me` + roles in the UI | done, deployed, verified live |
+| M7 | Policy Studio, change-impact diff, playground, dry-run, conformance, MCP view | not started |
 
-All five milestones are deployed and verified, and the **AWS-hosted agent gap is
+All six milestones are deployed and verified, and the **AWS-hosted agent gap is
 closed**: `Guardrail-Agent-dev` is a second Lambda running the demo agent against
 Groq, governed over HTTPS by the control-plane Lambda. Ollama remains the default
 for local runs.
@@ -84,7 +100,10 @@ Lambda-hosted agent via cloudflared tunnel (declined), Cognito console sign-in (
 # Quality gate — all four must pass before any commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy packages
-uv run pytest                      # 391 tests
+uv run pytest                      # 434 tests
+
+# The console has its own gate. Node 22; not covered by pytest.
+cd apps/console-ui && npm ci && npm run typecheck && npm test && npm run build
 
 # Deploy. Docker Desktop MUST be running (Lambda bundling needs it).
 # .env now holds every deploy variable, so sourcing it is the whole command.
@@ -144,8 +163,24 @@ cd infra && set -a && . ../.env && set +a && GUARDRAIL_STAGE=dev \
 # Run the governed agent LOCALLY (needs `ollama serve`)
 uv run python -m demo_agent "delete all 500 inactive user accounts"
 
-# Review console
+# M3 console -- one static HTML file, no build step. Kept as a fallback.
 cd apps/console && python -m http.server 5173 --bind 127.0.0.1
+
+# M6 React console, locally. Port 5173 is already in GUARDRAIL_CONSOLE_ORIGINS.
+cd apps/console-ui && npm run dev
+
+# Build and deploy the console. The URLs are baked in at BUILD time; the key never is.
+cd apps/console-ui && \
+  VITE_GUARDRAIL_BASE_URL="$BASE" \
+  VITE_GUARDRAIL_AGENT_URL="$AGENT" \
+  VITE_GUARDRAIL_VERSION=$(git rev-parse --short HEAD) \
+  npm run build
+cd ../../infra && set -a && . ../.env && set +a && GUARDRAIL_STAGE=dev \
+  npx cdk deploy Guardrail-Console-dev --require-approval never
+
+# Mint a key WITH A ROLE. Without --role it defaults to `agent`, which cannot approve.
+uv run python scripts/generate_api_key.py --tenant acme --name "console reviewer" \
+  --role reviewer --merge "$GUARDRAIL_API_KEYS_JSON"
 ```
 
 ---
@@ -174,6 +209,25 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   `acme-sim` (conformance *and* the AWS agent, **agent**), `acme-policy-admin`
   (**admin**). Raw values live in `.env` only — and the console key's raw value was
   never recorded anywhere, by design.
+
+**Console (M6)**
+- **Tailwind v4 dropped the `text-[--css-var]` shorthand.** It compiles to *nothing* — no
+  error, no warning, just an unstyled element. Colours declared in `@theme` generate real
+  utilities (`text-block`, `bg-hitl`), which is what the console uses. `color-mix(...)`
+  inside an arbitrary value still works fine. After any styling change, grep the built CSS
+  for a class you expect rather than trusting the build's exit code.
+- **`GUARDRAIL_API_KEY` in `.env` is `acme-sim`, role `agent` — it CANNOT approve.**
+  Connecting the console with it makes the review queue permanently read-only. Use
+  `GUARDRAIL_CONSOLE_API_KEY` (`acme-console-reviewer`, role `reviewer`).
+- The console must be **built before** `cdk deploy Guardrail-Console-dev`; the stack
+  raises rather than publishing an empty bucket, because a console returning 404 reads as
+  a *service* outage and sends people to debug the Lambda.
+- `index.html` is deployed by a **second** `BucketDeployment` with `no-cache`. Vite
+  fingerprints assets but not `index.html`, so a single immutable deployment would keep
+  serving the previous bundle to every returning browser.
+- The agent Lambda's Function URL needed CORS adding in M6. Without it the browser shows a
+  bare network error and there is nothing server-side to explain it — a browser
+  deliberately refuses to say whether a request failed on CORS or on the host being down.
 
 **Correctness**
 - **DynamoDB rejects Python floats.** Payloads are stored as *canonical JSON strings* so
@@ -226,6 +280,9 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   ~6 req/s. See `reports/loadtest.md`.
 - The two policy files (`policies/default.yaml` and the copy bundled into the Lambda)
   are asserted **byte-identical**. CI validates one and the Lambda ships the other.
+- A UI that gates on permissions needs a test that it does *not* over-claim **and** one
+  that it does not under-claim. Hiding a control from someone who holds the role is the
+  quieter bug and, during an incident, the more expensive one.
 - **Tests must not read the developer's shell.** `test_service_stack.py` synthesizes the
   CDK stack, which reads `GUARDRAIL_POLICY_ADMIN_KEY_IDS` from `os.environ` — so after
   `. ./.env` the suite failed locally while passing in CI. `_synth` now clears every

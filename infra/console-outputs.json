@@ -1,0 +1,8 @@
+{
+  "Guardrail-Console-dev": {
+    "ConsoleBucketName": "guardrail-console-dev-182355603382",
+    "ConsoleUrl": "https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html",
+    "ConsoleWebsiteUrl": "http://guardrail-console-dev-182355603382.s3-website-us-east-1.amazonaws.com",
+    "ConsoleAllowedOrigin": "https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com"
+  }
+}

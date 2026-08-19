@@ -1,0 +1,389 @@
+/**
+ * The console's behavioural tests.
+ *
+ * The load-bearing one is `does not render approve or deny for a key that lacks the
+ * reviewer role`. The server refuses that with a 403 regardless — this test is about the
+ * *console* not claiming an ability the key does not have, which is the exact shape of
+ * the defect this system already shipped once: `require_hitl` meant "pause for a human",
+ * and in practice meant "pause for anyone holding a key".
+ *
+ * A second one guards the reverse mistake, which is easier to make and quieter: hiding a
+ * control from someone who *does* hold the role. During an incident that is the more
+ * expensive failure.
+ */
+
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import App from "@/App";
+import { EFFECT_MEANING, EFFECT_STYLE, formatClock, shortHash } from "@/lib/format";
+import type { Capability, Effect } from "@/lib/types";
+
+const BASE = "https://guardrail.example";
+
+function identity(role: string, capabilities: Capability[]) {
+  return {
+    key_id: `${role}-1`,
+    tenant_id: "acme",
+    name: `${role} key`,
+    role,
+    capabilities,
+    stage: "dev",
+    version: "abc1234",
+  };
+}
+
+const HELD_DECISION = {
+  decision_id: "dec-1",
+  status: "pending",
+  allows_execution: false,
+  tool: "email.send",
+  arguments: { to: ["auditor@external-firm.com"], subject: "Q3" },
+  agent_id: "ops-assistant",
+  session_id: "session-1",
+  matched_rules: [{ rule_id: "external-email-review", effect: "require_hitl" }],
+  message: "Human review before any email leaves the organization.",
+  created_at: new Date().toISOString(),
+  expires_at: Math.floor(Date.now() / 1000) + 900,
+  seconds_remaining: 900,
+  on_timeout: "deny",
+  reviewers: ["security-oncall"],
+  audit_seq: 7,
+  resolved_at: null,
+  reviewer: null,
+  reason: null,
+};
+
+/** Route by path so one stub serves every screen. */
+function stubApi(overrides: Record<string, unknown> = {}) {
+  const routes: Record<string, unknown> = {
+    "/v1/decisions": { decisions: [HELD_DECISION], count: 1, tenant_id: "acme" },
+    "/v1/audit": { entries: [], count: 0, tenant_id: "acme" },
+    "/v1/audit/verify": {
+      chain_valid: true,
+      records_checked: 12,
+      tenant_id: "acme",
+      broken_at_seq: null,
+      reason: null,
+    },
+    "/v1/policies": {
+      bundle_id: "default",
+      tenant_id: "acme",
+      active_version: 3,
+      active_source: "published",
+      degraded: false,
+      versions: [],
+    },
+    ...overrides,
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      const path = url.replace(BASE, "").split("?")[0];
+      const body = routes[path];
+      if (body === undefined) {
+        return Promise.resolve(new Response("{}", { status: 404 }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }),
+  );
+}
+
+/** Put a verified session in place so the app boots straight into a connected state. */
+function connectAs(role: string, capabilities: Capability[]) {
+  sessionStorage.setItem("gr_base_url", BASE);
+  sessionStorage.setItem("gr_api_key", "a-key");
+  return identity(role, capabilities);
+}
+
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  window.location.hash = "#/";
+});
+
+// ---------------------------------------------------------------------------
+// Vocabulary completeness
+// ---------------------------------------------------------------------------
+
+describe("the four outcomes", () => {
+  const EFFECTS: Effect[] = ["allow", "log_and_allow", "require_hitl", "block"];
+
+  it("every outcome has a style and a plain-English meaning", () => {
+    // A fifth effect added to the engine must fail here rather than render as a blank
+    // badge with no explanation.
+    for (const effect of EFFECTS) {
+      expect(EFFECT_STYLE[effect]).toBeDefined();
+      expect(EFFECT_MEANING[effect].length).toBeGreaterThan(20);
+    }
+  });
+
+  it("labels every outcome in words, so colour is never the only signal", () => {
+    for (const effect of EFFECTS) {
+      expect(EFFECT_STYLE[effect].label).toMatch(/[A-Z]/);
+    }
+    const labels = EFFECTS.map((effect) => EFFECT_STYLE[effect].label);
+    expect(new Set(labels).size).toBe(EFFECTS.length);
+  });
+
+  it("gives each outcome a distinct colour token", () => {
+    const dots = EFFECTS.map((effect) => EFFECT_STYLE[effect].dot);
+    expect(new Set(dots).size).toBe(EFFECTS.length);
+  });
+});
+
+describe("formatters", () => {
+  it("abbreviates a hash without implying it is the whole thing", () => {
+    const full = "a".repeat(64);
+    expect(shortHash(full)).toContain("…");
+    expect(shortHash(full).length).toBeLessThan(full.length);
+  });
+
+  it("says 'expired' rather than counting into the negatives", () => {
+    expect(formatClock(-5)).toBe("expired");
+    expect(formatClock(0)).toBe("expired");
+    expect(formatClock(125)).toBe("2:05");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The landing page is readable without a credential
+// ---------------------------------------------------------------------------
+
+describe("overview", () => {
+  it("renders without a key, because it is what a first-time reader lands on", async () => {
+    stubApi();
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: /Guardrails for what an agent/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/not connected/i)).toBeInTheDocument();
+  });
+
+  it("names the self-approval defect rather than only its fix", async () => {
+    // Recording the defect is the point. A page that showed only the role model would be
+    // describing a design, not a finding.
+    stubApi();
+
+    render(<App />);
+
+    expect(
+      await screen.findByText(/could approve the action its own policy had held/i),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Connecting
+// ---------------------------------------------------------------------------
+
+describe("connecting", () => {
+  it("verifies the key against /v1/me before storing it", async () => {
+    stubApi({ "/v1/me": identity("reviewer", ["resolve_decisions"]) });
+    window.location.hash = "#/connect";
+
+    render(<App />);
+
+    const user = userEvent.setup();
+    await user.type(
+      await screen.findByPlaceholderText(/<control-plane>/i),
+      BASE,
+    );
+    await user.type(screen.getByPlaceholderText(/paste your key/i), "a-key");
+    await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem("gr_api_key")).toBe("a-key");
+    });
+  });
+
+  it("stores nothing when the server rejects the key", async () => {
+    // The failure this prevents: a console that looks connected while every page it
+    // renders is empty for authentication reasons it never mentions.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ detail: "invalid api key" }), { status: 401 }),
+        ),
+      ),
+    );
+    window.location.hash = "#/connect";
+
+    render(<App />);
+
+    const user = userEvent.setup();
+    await user.type(await screen.findByPlaceholderText(/<control-plane>/i), BASE);
+    await user.type(screen.getByPlaceholderText(/paste your key/i), "wrong");
+    await user.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/401/);
+    expect(sessionStorage.getItem("gr_api_key")).toBeNull();
+  });
+
+  it("never renders the key back into the page", async () => {
+    stubApi({ "/v1/me": identity("reviewer", ["resolve_decisions"]) });
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/connect";
+
+    const { container } = render(<App />);
+    await screen.findByText(/connected as/i);
+
+    // The input is a password field, and the key must not appear as visible text
+    // anywhere — a screenshot of this console must not leak a credential.
+    expect(container.textContent).not.toContain("a-key");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The permission gate — the reason /v1/me exists
+// ---------------------------------------------------------------------------
+
+describe("review queue permissions", () => {
+  it("does not render approve or deny for a key that lacks the reviewer role", async () => {
+    stubApi({
+      "/v1/me": identity("agent", ["evaluate", "read_decisions", "read_audit"]),
+    });
+    connectAs("agent", ["evaluate", "read_decisions"]);
+    window.location.hash = "#/review";
+
+    render(<App />);
+
+    // The held action is visible — reading that your own action is pending is how an
+    // agent reports status, and is harmless.
+    expect(await screen.findByText("email.send")).toBeInTheDocument();
+
+    // Acting on it is the part that must be refused.
+    expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^deny$/i })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/may not resolve held actions|Read-only/i).length).toBeGreaterThan(0);
+  });
+
+  it("renders both actions for a reviewer", async () => {
+    // Guards the opposite mistake: hiding a control from someone who holds the role.
+    // During an incident that is the more expensive failure of the two.
+    stubApi({
+      "/v1/me": identity("reviewer", [
+        "evaluate",
+        "read_decisions",
+        "resolve_decisions",
+      ]),
+    });
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/review";
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: /approve — let it run/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeInTheDocument();
+  });
+
+  it("shows what is being approved, so approval is not a rubber stamp", async () => {
+    stubApi({ "/v1/me": identity("reviewer", ["resolve_decisions"]) });
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/review";
+
+    render(<App />);
+    await screen.findByText("email.send");
+
+    expect(screen.getByText(/the full action being approved/i)).toBeInTheDocument();
+    expect(screen.getByText(/external-email-review/)).toBeInTheDocument();
+  });
+
+  it("states that a timeout denies, so silence is not consent", async () => {
+    stubApi({ "/v1/me": identity("reviewer", ["resolve_decisions"]) });
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/review";
+
+    render(<App />);
+    await screen.findByText("email.send");
+
+    expect(screen.getAllByText(/deny/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Silence\s+must not become consent/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a 403 from the server rather than failing silently", async () => {
+    // Belt and braces: even if the capability list were ever wrong, the refusal must
+    // reach the operator instead of the click appearing to do nothing.
+    const routes: Record<string, unknown> = {
+      "/v1/me": identity("reviewer", ["resolve_decisions"]),
+      "/v1/decisions": { decisions: [HELD_DECISION], count: 1, tenant_id: "acme" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const path = url.replace(BASE, "").split("?")[0];
+        if (path.endsWith("/resolve")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ detail: "this key may not approve" }), {
+              status: 403,
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(routes[path] ?? {}), { status: 200 }),
+        );
+      }),
+    );
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/review";
+
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /approve — let it run/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(/may not approve/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+describe("audit page", () => {
+  it("reports the chain verdict from the server, not from the record list", async () => {
+    stubApi({
+      "/v1/me": identity("agent", ["read_audit"]),
+      "/v1/audit/verify": {
+        chain_valid: false,
+        records_checked: 40,
+        tenant_id: "acme",
+        broken_at_seq: 17,
+        reason: "content mismatch at seq 17",
+      },
+    });
+    connectAs("agent", ["read_audit"]);
+    window.location.hash = "#/audit";
+
+    render(<App />);
+
+    expect(await screen.findByText(/CHAIN BROKEN/)).toBeInTheDocument();
+    expect(screen.getByText(/content mismatch at seq 17/)).toBeInTheDocument();
+  });
+
+  it("states the limit of the chain rather than only its strength", async () => {
+    // Tamper-evident, not tamper-proof. A page that claimed otherwise would be the kind
+    // of overstatement this whole project argues against.
+    stubApi({ "/v1/me": identity("agent", ["read_audit"]) });
+    connectAs("agent", ["read_audit"]);
+    window.location.hash = "#/audit";
+
+    render(<App />);
+
+    expect(await screen.findByText(/not detected/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/consistent rewrite of the whole chain/i),
+    ).toBeInTheDocument();
+  });
+});
