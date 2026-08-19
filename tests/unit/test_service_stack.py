@@ -229,3 +229,26 @@ def test_no_paid_resources_in_either_mode() -> None:
         template = _synth(enable_cloudfront=enable)
         found = {r.get("Type") for r in template.get("Resources", {}).values()}
         assert not (found & BANNED_TYPES.keys()), f"paid resource with cloudfront={enable}"
+
+
+def test_the_service_role_cannot_delete_audit_records() -> None:
+    """A governance system whose own role can erase its evidence offers much weaker
+    assurance than one that cannot.
+
+    UpdateItem is granted (human-review resolution needs it); DeleteItem never is.
+    """
+    template = _synth(enable_cloudfront=False)
+
+    actions: set[str] = set()
+    for resource in template.get("Resources", {}).values():
+        if resource.get("Type") != "AWS::IAM::Policy":
+            continue
+        for statement in resource["Properties"]["PolicyDocument"]["Statement"]:
+            raw = statement.get("Action", [])
+            actions.update([raw] if isinstance(raw, str) else raw)
+
+    dynamo = {a for a in actions if a.startswith("dynamodb:")}
+
+    assert "dynamodb:UpdateItem" in dynamo, "resolution needs UpdateItem"
+    assert "dynamodb:DeleteItem" not in dynamo, f"role can delete evidence: {dynamo}"
+    assert not any(a.endswith("*") for a in dynamo), f"wildcard grant found: {dynamo}"

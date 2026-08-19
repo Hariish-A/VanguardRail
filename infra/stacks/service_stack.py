@@ -159,14 +159,23 @@ class ServiceStack(Stack):
         self.audit_table = self._create_audit_table()
         self.function = self._create_function(stage=stage, version=version, log_group=log_group)
 
-        # Least privilege: the service appends and reads audit records, and must not be
-        # able to delete them. A governance system whose own role can erase its evidence
-        # provides much weaker assurance than one that cannot.
+        # Least privilege, enumerated rather than granted wholesale.
+        #
+        # UpdateItem is required for human-review resolution, which flips a decision's
+        # status under a condition. It was omitted at first and the deploy correctly
+        # refused the action with AccessDenied -- the grant working as intended.
+        #
+        # DeleteItem is deliberately still withheld. A governance system whose own role
+        # can erase its evidence offers much weaker assurance than one that cannot, and
+        # nothing in the service ever needs to delete: audit records are permanent, and
+        # decision records expire through DynamoDB TTL, which is performed by the
+        # service principal rather than by this role.
         self.audit_table.grant(
             self.function,
             "dynamodb:PutItem",
             "dynamodb:GetItem",
             "dynamodb:Query",
+            "dynamodb:UpdateItem",
         )
 
         self.function_url = self._create_function_url(self.function)

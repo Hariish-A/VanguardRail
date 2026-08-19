@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-
 from guardrail_service import auth, dependencies
 from guardrail_service.storage.audit import InMemoryAuditRepository
 from guardrail_service.storage.decisions import (
