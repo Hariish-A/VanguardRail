@@ -63,6 +63,33 @@ curl -s $BASE/healthz
 uv run guardrail-sim run scenarios/ --endpoint $BASE --api-key "$GUARDRAIL_API_KEY"   --junit reports/conformance.xml --html reports/conformance.html
 ```
 
+## An agent on AWS, governed by the control plane on AWS
+
+The demo agent also runs as its own Lambda, so the brief's *"govern agents also
+hosted on AWS"* is satisfied literally. It uses Groq for inference, so it works
+whenever anyone runs it — no laptop, no tunnel:
+
+```
+POST /  ──►  agent Lambda  ──HTTPS──►  guardrail Lambda  ──►  audit chain
+                  │
+                  └──HTTPS──►  Groq
+```
+
+```bash
+curl -X POST https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws \
+  -H "x-api-key: $GUARDRAIL_AGENT_API_KEY" -H 'content-type: application/json' \
+  -d '{"task": "Delete all 500 inactive user accounts from the users table."}'
+```
+
+It returns the full transcript: every tool the model tried, what policy decided,
+which rule fired, **and the audit sequence number** — so the same decision can be
+found afterwards in `/v1/audit`. Plus the side-effect ledger, which is what makes
+"blocked" verifiable rather than merely claimed.
+
+All four outcomes verified live from AWS: bulk delete **blocked** (nothing executed),
+external email **held for review** then approved by a human, internal email
+**allowed**, confidential read **logged and allowed**.
+
 ## Governing a tool server that knows nothing about Guardrail
 
 `guardrail-mcp` proxies any MCP server and enforces policy on every `tools/call`, with

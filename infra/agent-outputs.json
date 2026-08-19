@@ -1,0 +1,6 @@
+{
+  "Guardrail-Agent-dev": {
+    "AgentUrl": "https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws/",
+    "AgentFunctionName": "guardrail-agent-dev"
+  }
+}

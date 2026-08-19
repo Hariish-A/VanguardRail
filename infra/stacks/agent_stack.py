@@ -200,7 +200,10 @@ class AgentStack(Stack):
                 "GUARDRAIL_LLM_BASE_URL": os.environ.get(
                     "GUARDRAIL_LLM_BASE_URL", "https://api.groq.com/openai/v1"
                 ),
-                "GUARDRAIL_LLM_MODEL": os.environ.get("GUARDRAIL_LLM_MODEL", "qwen/qwen3-32b"),
+                # Verified against the live model list before deploying: `qwen/qwen3-32b`,
+                # which the plan named, has been retired by Groq. Both this and
+                # openai/gpt-oss-20b were checked to emit correct tool calls.
+                "GUARDRAIL_LLM_MODEL": os.environ.get("GUARDRAIL_LLM_MODEL", "qwen/qwen3.6-27b"),
                 "GUARDRAIL_LLM_API_KEY": os.environ.get("GROQ_API_KEY", ""),
                 "GUARDRAIL_STAGE": stage,
                 "GUARDRAIL_VERSION": version,

@@ -46,6 +46,7 @@ user's choice, both still on disk.
 
 - AWS account `182355603382`, region **us-east-1** (not negotiable — CloudFront needs it)
 - Live base URL: `https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws`
+- AWS-hosted agent: `https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws`
 - Function `guardrail-service-dev`, table `guardrail-audit-dev`
 - **Credentials live in `.env` (git-ignored). Read them from there — never hardcode a key
   into a committed file.**
@@ -61,9 +62,10 @@ user's choice, both still on disk.
 | M4 | Simulation harness, dry-run, policy versioning | done, verified live |
 | M5 | Hardening, multi-tenancy, MCP proxy, load test | done, verified live |
 
-All five milestones are deployed and verified. The one open gap against the brief:
-the rubric rewards governing agents **also hosted on AWS**, and the demo agent runs
-locally against Ollama while the control plane is on AWS.
+All five milestones are deployed and verified, and the **AWS-hosted agent gap is
+closed**: `Guardrail-Agent-dev` is a second Lambda running the demo agent against
+Groq, governed over HTTPS by the control-plane Lambda. Ollama remains the default
+for local runs.
 
 Deferred deliberately, recorded in `PROGRESS.md` so they don't resurface as phantom TODOs:
 SigV4 signing (obsolete — CloudFront was removed), Bedrock adapter (costs money),
@@ -123,7 +125,18 @@ uv run python scripts/portability_proof.py
 uv run python scripts/loadtest.py --endpoint "$BASE" --api-key "$GUARDRAIL_API_KEY" \
   --concurrency 2 --duration 120
 
-# Run the governed agent (needs `ollama serve`)
+# Run the AWS-HOSTED agent -- no laptop involved, works any time
+curl -X POST "$AGENT" -H "x-api-key: $GUARDRAIL_AGENT_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"task": "Delete all 500 inactive user accounts from the users table."}'
+
+# Deploy it. Needs GROQ_API_KEY and GUARDRAIL_AGENT_TARGET_URL in .env; the stack
+# is skipped entirely when the target URL is absent.
+cd infra && set -a && . ../.env && set +a && GUARDRAIL_STAGE=dev \
+  GUARDRAIL_VERSION=$(git rev-parse HEAD) \
+  cdk deploy Guardrail-Agent-dev --require-approval never
+
+# Run the governed agent LOCALLY (needs `ollama serve`)
 uv run python -m demo_agent "delete all 500 inactive user accounts"
 
 # Review console
@@ -145,6 +158,9 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   which has no `aws_cdk`.
 
 **Deploy**
+- **Verify a hosted model still exists before deploying against it.** The plan named
+  Groq's `qwen/qwen3-32b`; it has been retired. `curl .../v1/models` first. Current
+  default is `qwen/qwen3.6-27b` (`openai/gpt-oss-20b` also tool-calls correctly).
 - **`GUARDRAIL_API_KEYS_JSON` must be single-quoted in `.env`.** Unquoted, `. .env` strips
   the inner double quotes, the deployed table is unparseable, auth fails closed, and
   **every request returns 401** with nothing in the deploy output explaining why. Cost a

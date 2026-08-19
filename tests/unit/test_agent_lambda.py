@@ -51,7 +51,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GUARDRAIL_BASE_URL", "https://guardrail.test")
     monkeypatch.setenv("GUARDRAIL_API_KEY", "guardrail-key")
     monkeypatch.setenv("GUARDRAIL_LLM_BASE_URL", "https://api.groq.com/openai/v1")
-    monkeypatch.setenv("GUARDRAIL_LLM_MODEL", "qwen/qwen3-32b")
+    monkeypatch.setenv("GUARDRAIL_LLM_MODEL", "qwen/qwen3.6-27b")
     monkeypatch.setenv("GUARDRAIL_LLM_API_KEY", "gsk_test")
 
 
@@ -90,7 +90,7 @@ def test_a_get_describes_the_deployment_without_leaking_the_key(wired: None) -> 
     body = _decoded(lambda_handler(_event(method="GET")))
 
     assert body["hosted_on"] == "aws-lambda"
-    assert body["llm"]["model"] == "qwen/qwen3-32b"
+    assert body["llm"]["model"] == "qwen/qwen3.6-27b"
     assert body["llm"]["api_key_configured"] is True
 
     serialized = json.dumps(body)
