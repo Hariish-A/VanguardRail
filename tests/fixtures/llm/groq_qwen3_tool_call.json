@@ -1,0 +1,39 @@
+{
+  "id": "chatcmpl-8a1f2b3c-4d5e-6f70-8901-234567890abc",
+  "object": "chat.completion",
+  "created": 1787105400,
+  "model": "qwen/qwen3-32b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_9x2k",
+            "type": "function",
+            "function": {
+              "name": "email_send",
+              "arguments": "{\"to\": \"partner@external.com\", \"subject\": \"Q3 Report\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "queue_time": 0.021,
+    "prompt_tokens": 214,
+    "prompt_time": 0.012,
+    "completion_tokens": 27,
+    "completion_time": 0.081,
+    "total_tokens": 241,
+    "total_time": 0.093
+  },
+  "usage_breakdown": null,
+  "system_fingerprint": "fp_a1b2c3d4",
+  "x_groq": { "id": "req_01jabcxyz" }
+}

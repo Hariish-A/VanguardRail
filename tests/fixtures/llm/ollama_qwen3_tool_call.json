@@ -1,0 +1,34 @@
+{
+  "id": "chatcmpl-720",
+  "object": "chat.completion",
+  "created": 1787105339,
+  "model": "qwen3:latest",
+  "system_fingerprint": "fp_ollama",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "Okay, the user wants to email the Q3 report to partner@external.com. Let me check the tools available. There's a function called email_send. The parameters required are 'to' and 'subject'. The user provided the email address, but the subject isn't mentioned. Since the subject is required, I should probably ask the user for it. But wait, maybe the report's subject is implied, like \"Q3 Report\". Should I assume that or ask for confirmation? The function requires the subject as a string. To be safe, I'll need to get the subject from the user. So I'll request the subject line to include in the email.\n",
+        "tool_calls": [
+          {
+            "id": "call_mdiwc9ms",
+            "index": 0,
+            "type": "function",
+            "function": {
+              "name": "email_send",
+              "arguments": "{\"to\":\"partner@external.com\",\"subject\":\"Q3 Report\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 158,
+    "completion_tokens": 170,
+    "total_tokens": 328
+  }
+}

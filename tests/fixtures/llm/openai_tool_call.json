@@ -1,0 +1,43 @@
+{
+  "id": "chatcmpl-BxYz1234567890abcdefghij",
+  "object": "chat.completion",
+  "created": 1787105500,
+  "model": "gpt-4o-mini-2024-07-18",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "annotations": [],
+        "tool_calls": [
+          {
+            "id": "call_abc123XYZ",
+            "type": "function",
+            "function": {
+              "name": "email_send",
+              "arguments": "{\"to\":\"partner@external.com\",\"subject\":\"Q3 Report\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 198,
+    "completion_tokens": 24,
+    "total_tokens": 222,
+    "prompt_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_9f8e7d6c5b"
+}
