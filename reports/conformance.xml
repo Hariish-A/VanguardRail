@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="guardrail-conformance" tests="20" failures="0" errors="0" time="6.969">
+  <testsuite name="Policy model properties" tests="15" failures="0" errors="0" time="5.369" timestamp="2026-08-19T08:56:11+00:00">
+    <properties>
+      <property name="target" value="live https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws" />
+      <property name="mode" value="enforce" />
+    </properties>
+    <testcase classname="Policy model properties" name="unmeasurable-delete-fails-closed" time="0.9219">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "db-bulk-delete"
+  ],
+  "message": "Blocked: this would delete unknown records, above the limit of 100. Narrow the selection or request an exception.",
+  "unknown_paths": [
+    "derived.record_count"
+  ],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 4.105
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="unparseable-recipient-fails-closed" time="0.321">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "external-email-review"
+  ],
+  "message": "Held for review: this message reaches external recipients (unknown).",
+  "unknown_paths": [
+    "derived.recipient_domains"
+  ],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.853
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="bcc-external-still-reviewed" time="0.3427">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "external-email-review"
+  ],
+  "message": "Held for review: this message reaches external recipients (acme-corp.com, competitor.com).",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.699
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="id-list-counts-as-record-count" time="0.321">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "db-bulk-delete"
+  ],
+  "message": "Blocked: this would delete 101 records, above the limit of 100. Narrow the selection or request an exception.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.949
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="most-restrictive-wins" time="0.317">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "confidential-read-audit",
+    "credentials-path-block"
+  ],
+  "message": "Blocked: /srv/confidential/.env looks like a credential store.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.117
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="production-context-escalates" time="0.3328">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "destructive-tool-in-production"
+  ],
+  "message": "Held for review: destructive database operation against production.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.605
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="ssh-key-read-blocked" time="0.3185">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "credentials-path-block"
+  ],
+  "message": "Blocked: /home/agent/.ssh/id_rsa looks like a credential store.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.364
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="windows-path-normalised" time="0.3101">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "credentials-path-block"
+  ],
+  "message": "Blocked: C:/Users/agent/.ssh/id_rsa looks like a credential store.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.351
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="refund-over-limit-reviewed" time="0.3129">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "payments-refund-limit"
+  ],
+  "message": "Held for review: refund of 2500.75 exceeds the 1000 auto-approval limit.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.057
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="refund-within-limit-allowed" time="0.3064">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.869
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="unmatched-tool-allowed" time="0.3001">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.243
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="mcp-credential-read-blocked" time="0.3009">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "mcp-credential-read-block"
+  ],
+  "message": "Blocked: /home/agent/.ssh/id_rsa looks like a credential store, and this MCP server is proxied through Guardrail. The file was not read.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.404
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="mcp-ordinary-read-allowed" time="0.3219">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.475
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="mcp-write-held-for-review" time="0.3285">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "mcp-write-requires-review"
+  ],
+  "message": "Held for review: filesystem.write_file would modify the filesystem at /srv/data/report.txt.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.125
+}</system-out>
+    </testcase>
+    <testcase classname="Policy model properties" name="mcp-server-prefix-scopes-the-rule" time="0.3135">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.113
+}</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="Problem statement success criteria" tests="5" failures="0" errors="0" time="1.599" timestamp="2026-08-19T08:56:11+00:00">
+    <properties>
+      <property name="target" value="live https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws" />
+      <property name="mode" value="enforce" />
+    </properties>
+    <testcase classname="Problem statement success criteria" name="bulk-delete-blocked" time="0.3176">
+      <system-out>{
+  "decision": "block",
+  "allowed": false,
+  "matched_rules": [
+    "db-bulk-delete"
+  ],
+  "message": "Blocked: this would delete 500 records, above the limit of 100. Narrow the selection or request an exception.",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.36
+}</system-out>
+    </testcase>
+    <testcase classname="Problem statement success criteria" name="small-delete-allowed" time="0.3158">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 4.429
+}</system-out>
+    </testcase>
+    <testcase classname="Problem statement success criteria" name="external-email-held-for-review" time="0.3449">
+      <system-out>{
+  "decision": "require_hitl",
+  "allowed": false,
+  "matched_rules": [
+    "external-email-review"
+  ],
+  "message": "Held for review: this message reaches external recipients (external.com).",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.375
+}</system-out>
+    </testcase>
+    <testcase classname="Problem statement success criteria" name="internal-email-allowed" time="0.3161">
+      <system-out>{
+  "decision": "allow",
+  "allowed": true,
+  "matched_rules": [],
+  "message": null,
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.662
+}</system-out>
+    </testcase>
+    <testcase classname="Problem statement success criteria" name="confidential-read-recorded" time="0.3048">
+      <system-out>{
+  "decision": "log_and_allow",
+  "allowed": true,
+  "matched_rules": [
+    "confidential-read-audit"
+  ],
+  "message": "Confidential path accessed: /srv/confidential/q3.pdf",
+  "unknown_paths": [],
+  "bundle": "default v3",
+  "dry_run": false,
+  "engine_latency_ms": 3.166
+}</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>
