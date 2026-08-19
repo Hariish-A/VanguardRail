@@ -949,19 +949,24 @@ so explicitly when it does.
 ### Deployment: S3, not CloudFront
 
 Same constraint as the service: a new AWS account cannot create a CloudFront distribution
-without a support case. The bucket serves the objects itself, which produces two endpoints
-that are **not** equivalent:
+without a support case. The bucket serves the objects itself, over the **REST** endpoint —
+`https://<bucket>.s3.us-east-1.amazonaws.com/index.html`.
 
-* **REST** — `https://<bucket>.s3.us-east-1.amazonaws.com/index.html`. HTTPS. This is the
-  one to hand out.
-* **Website** — `http://<bucket>.s3-website-us-east-1.amazonaws.com`. Prettier, supports
-  an index document, and **HTTP only** — S3 website hosting cannot terminate TLS.
+S3's other endpoint, the *website* one, is HTTP and cannot be anything else: website
+hosting has no TLS setting. The stack originally enabled both and documented the REST one
+as preferred. **That was the wrong call, and it was corrected.** This page accepts an API
+key, and a page delivered over plain HTTP can be rewritten in transit into one that looks
+identical and posts the key elsewhere. Documenting the safe URL is not a control —
+whichever endpoint somebody pastes into a chat window is the one that gets used.
 
-The console routes with `#/`, so a hash never reaches the server and the REST endpoint
-works completely: deep links and refreshes both resolve with no rewrite rule. An HTTP page
-calling an HTTPS API is permitted (mixed-content blocking runs the other way), but the
-page itself would be tamperable in transit and it takes an API key — so both endpoints are
-emitted and the outputs say which to use.
+Website hosting is now off. `http://…s3-website-us-east-1.amazonaws.com` returns
+`NoSuchWebsiteConfiguration`, the HTTP origin is gone from both CORS allowlists, and
+`test_website_hosting_is_not_enabled` fails if the setting returns — verified by putting
+it back and watching the test go red.
+
+Nothing was lost. The console routes with `#/`, so one `index.html` serves every route and
+a hash never reaches the server: deep links and refreshes resolve with no rewrite rule and
+no index document.
 
 The bucket blocks public **ACLs** while permitting a public **policy**, so the single
 grant path is the read-only statement CDK declares. `test_the_public_policy_grants_read_only`
@@ -1305,11 +1310,31 @@ The pipeline uses **OIDC**, so there are no long-lived AWS keys anywhere. You wi
 
 | Secret | What it is |
 |---|---|
-| `AWS_DEPLOY_ROLE_ARN` | ARN of an IAM role trusting GitHub's OIDC provider, restricted to your repo. I will generate the exact trust policy and creation commands when you are ready. |
+| `AWS_DEPLOY_ROLE_ARN` | ARN of an IAM role trusting GitHub's OIDC provider, restricted to your repo. **Nothing deploys until this is set** — see below. |
 | `GUARDRAIL_ALERT_EMAIL` | Same address as above, for the budget stack in CI. |
+| `GUARDRAIL_API_KEYS_JSON` | The key table. Single-quoting does not apply here; GitHub stores the value literally. |
+| `GUARDRAIL_POLICY_ADMIN_KEY_IDS` | Empty leaves policy administration closed, which is the correct default. |
+| `GUARDRAIL_AGENT_TARGET_URL` | The control-plane URL. Absent, the agent stack is skipped. |
+| `GUARDRAIL_CONSOLE_ORIGINS` | Browser origins. Absent, both stacks fall back to localhost rather than shipping an empty allowlist. |
+| `GUARDRAIL_CONSOLE_BASE_URL` · `GUARDRAIL_CONSOLE_AGENT_URL` | Baked into the console bundle at build time. Only URLs — never a key. |
 
 Also required: a GitHub **environment named `dev`** (Settings → Environments), which the
 deploy job targets. Make the repo **public** so Actions minutes are free.
+
+**The state today.** The account has **no GitHub OIDC provider**
+(`aws iam list-open-id-connect-providers` returns an empty list), so
+`AWS_DEPLOY_ROLE_ARN` cannot be set to anything that works, and **every deploy so far has
+been manual**.
+
+The branch gate was corrected after M6: it read `refs/heads/main` while this repository
+works on `master`, so the deploy job had never run once. It now accepts both. But simply
+flipping it would have turned every push red at the credential step — a red build meaning
+"not set up", which at a glance is indistinguishable from "the code is broken".
+
+So a `deploy-preflight` job checks whether the role secret exists and the deploy job is
+gated on its output. Today it reports *Deploy skipped* as a GitHub notice naming exactly
+what to create; the moment the secret is added, pushes to `master` deploy on their own
+with no further change. **Skipping is not passing, and the notice says which it is.**
 
 ### 7.5 Deploy commands, once the above exists
 

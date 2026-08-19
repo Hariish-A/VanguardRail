@@ -43,7 +43,8 @@ committed.
    the maximum reservable value is zero. The account quota is the ceiling instead.
    A **`prod` stage also cannot coexist with `dev`**: another 15/15 would take the
    account to 30 WCU against a free 25.
-8. **Browser origins are an explicit allowlist, never `*`.**
+8. **The console is reachable over TLS only, and its origins are an explicit
+   allowlist, never `*`.**
    `GUARDRAIL_CONSOLE_ORIGINS` is read by **both** the service and agent stacks and must
    match the `Origin` header verbatim, scheme included — console requests carry
    credentials, and a wildcard origin with credentials is rejected by browsers anyway. An
@@ -62,9 +63,10 @@ committed.
 - AWS-hosted agent: `https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws`
 - **Review console (M6):**
   `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html`
-  HTTPS via the S3 *REST* endpoint. The *website* endpoint
-  (`http://…s3-website-us-east-1.amazonaws.com`) is HTTP only — S3 website hosting cannot
-  terminate TLS — so hand out the REST one.
+  **HTTPS only.** S3 website hosting is deliberately *not* enabled — it cannot terminate
+  TLS, and this page takes an API key. The `s3-website-…` hostname returns
+  `NoSuchWebsiteConfiguration`, and `test_website_hosting_is_not_enabled` fails if it
+  ever comes back.
 - Function `guardrail-service-dev`, table `guardrail-audit-dev`,
   console bucket `guardrail-console-dev-182355603382`
 - **Credentials live in `.env` (git-ignored). Read them from there — never hardcode a key
@@ -198,6 +200,12 @@ uv run python scripts/generate_api_key.py --tenant acme --name "console reviewer
   which has no `aws_cdk`.
 
 **Deploy**
+- **CI does not deploy, and that is a configuration gap rather than a design choice.**
+  The account has no GitHub OIDC provider, so `AWS_DEPLOY_ROLE_ARN` cannot be set and
+  every deploy is manual. The branch gate now accepts `master` (it read `main` only, so
+  the deploy job had never run), and a `deploy-preflight` job skips the deploy with a
+  named notice instead of failing on missing credentials. Add the secret and pushes to
+  `master` deploy on their own.
 - **Verify a hosted model still exists before deploying against it.** The plan named
   Groq's `qwen/qwen3-32b`; it has been retired. `curl .../v1/models` first. Current
   default is `qwen/qwen3.6-27b` (`openai/gpt-oss-20b` also tool-calls correctly).

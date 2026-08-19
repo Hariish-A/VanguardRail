@@ -281,10 +281,17 @@ only. The *REST* endpoint is HTTPS. Since the console routes with `#/`, a hash n
 reaches the server, so the REST endpoint needs no index-document rewrite: deep links and
 refreshes both resolve from the single `index.html`. HTTPS therefore costs nothing.
 
+**Amended.** The first version enabled website hosting as well and documented the REST
+endpoint as preferred. That was wrong: this page accepts an API key, a page served over
+plain HTTP can be rewritten in transit into one that looks identical and posts the key
+elsewhere, and *documenting* the safe URL does not remove the unsafe one — whichever
+endpoint someone pastes into a chat window is the one that gets used. Website hosting is
+now off, `test_website_hosting_is_not_enabled` keeps it off, and a second test fails if
+any stack output publishes an `http://` URL at all.
+
 **Cost.** S3 is the project's only Tier B service — 5 GB free for 12 months, then about
-$0.023/GB. At roughly half a megabyte that is a fraction of a cent per month. The website
-endpoint still exists and is still HTTP; it is emitted as a convenience and documented as
-the one *not* to use.
+$0.023/GB. At roughly half a megabyte that is a fraction of a cent per month. The shorter
+hostname and the index document are given up; neither was needed.
 
 ---
 

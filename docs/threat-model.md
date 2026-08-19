@@ -156,10 +156,13 @@ origin, and the credential dies with the tab — but that is mitigation, not eli
 Cognito hosted sign-in removes the problem properly and is deferred; it needs a user pool,
 an app client, and a callback domain, which buys little while there is one reviewer.
 
-A second, smaller one: the S3 **website** endpoint is HTTP only, because S3 website
-hosting cannot terminate TLS. A page served over plain HTTP is tamperable in transit, and
-this page takes a key. Both endpoints are emitted and the HTTPS REST endpoint is the one
-documented and handed out — but the HTTP one exists and works.
+**Closed since first deployment.** The bucket originally had website hosting enabled,
+which exposed an HTTP-only endpoint alongside the HTTPS one. A page served over plain HTTP
+is rewritable in transit — into a page that looks identical and posts the key somewhere
+else — and documenting the HTTPS URL as preferred is not a control, because whichever
+endpoint somebody pastes into a chat window is the one that gets used. Website hosting is
+now off; the HTTP hostname returns `NoSuchWebsiteConfiguration` and the HTTP origin is no
+longer in either CORS allowlist.
 
 ### 7. A hostile policy file
 
@@ -241,8 +244,8 @@ still `pending` and `allows_execution: false`.
 6. **Console authentication is an API key in `sessionStorage`.** Cognito was scoped and
    deferred; this is acceptable for a single-reviewer demo and not for production. An XSS
    on the console page would disclose the reviewer's key.
-7. **The console bucket is publicly readable and served over HTTP as well as HTTPS.**
-   Read-only, holding only a compiled frontend — but the HTTP website endpoint is
-   tamperable in transit, and the page takes a credential.
+7. **The console bucket is publicly readable.** Read-only, and it holds only a compiled
+   frontend, but anyone can enumerate it. There is no WAF and no origin shielding, for
+   the same reason there is none in front of the API.
 
 Items 1–3 are the ones that would matter first in a real deployment.

@@ -530,7 +530,7 @@ bucket arrives in M6. CloudFront is designed in and disabled â€” see step 2 of Â
 | **Lambda** (arm64) | Scales to zero; arm64 is cheaper per GB-s and the free tier is denominated in GB-s | 1M req + 400k GB-s/mo, forever |
 | **Function URL** | API Gateway's free tier expires after 12 months, then $1/million; this never charges. Also the whole edge -- CloudFront is optional | $0, forever |
 | **CloudFront** | *Optional.* New AWS accounts cannot create distributions without a support case, so the architecture does not depend on it. Enable with `GUARDRAIL_ENABLE_CLOUDFRONT=true` for edge caching and a custom domain | 1 TB + 10M req/mo, forever |
-| **S3 static hosting** | Serves the M6 React console. Its **REST** endpoint is HTTPS, which is what the console is handed out on; the *website* endpoint is HTTP-only and is emitted only as a convenience. The console routes with `#/`, so no server-side rewrite is needed for deep links | 5 GB for 12 months, then ~$0.001/mo at this size |
+| **S3 static hosting** | Serves the M6 React console over its **REST** endpoint, which is HTTPS. Website hosting is deliberately off: it is HTTP-only, and the page takes an API key. The console routes with `#/`, so one `index.html` serves every route with no rewrite rule and no index document | 5 GB for 12 months, then ~$0.001/mo at this size |
 | **DynamoDB** | Conditional writes give race-free HITL resolution; single-digit-ms reads | 25 GB + 25 WCU/RCU **provisioned** |
 | **CloudWatch** | Logs Insights carries the fine-grained analysis the metric budget cannot | 5 GB logs, 10 metrics, 10 alarms |
 | **Cognito** | Console auth without building password handling | 10,000 MAU, never expires |

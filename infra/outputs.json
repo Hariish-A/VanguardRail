@@ -5,5 +5,14 @@
     "EdgeMode": "function-url-direct",
     "AuditTableName": "guardrail-audit-dev",
     "BaseUrl": "https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws/"
+  },
+  "Guardrail-Console-dev": {
+    "ConsoleBucketName": "guardrail-console-dev-182355603382",
+    "ConsoleUrl": "https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html",
+    "ConsoleAllowedOrigin": "https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com"
+  },
+  "Guardrail-Agent-dev": {
+    "AgentUrl": "https://lasoey7wnbaptha27mywweefxm0xspdg.lambda-url.us-east-1.on.aws/",
+    "AgentFunctionName": "guardrail-agent-dev"
   }
 }

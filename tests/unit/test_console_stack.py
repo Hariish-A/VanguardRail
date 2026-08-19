@@ -143,6 +143,44 @@ def test_the_public_policy_grants_read_only() -> None:
         )
 
 
+def test_website_hosting_is_not_enabled() -> None:
+    """The console must be reachable over TLS only.
+
+    S3's *website* endpoint is HTTP and cannot be anything else -- website hosting has no
+    TLS setting, and CloudFront is the usual way to add one. This page accepts an API key,
+    and a page delivered over plain HTTP can be rewritten in transit into one that looks
+    identical and posts the key somewhere else.
+
+    Documenting the HTTPS URL as preferred is not a control: whichever endpoint somebody
+    pastes into a chat window is the one that gets used. Setting `website_index_document`
+    is what turns the HTTP hostname on, so the absence of a `WebsiteConfiguration` is the
+    thing to assert.
+    """
+    template = _synth()
+
+    bucket = _resources_of_type(template, "AWS::S3::Bucket")[0]
+
+    assert "WebsiteConfiguration" not in bucket["Properties"], (
+        "Website hosting is enabled, which exposes an HTTP-only endpoint for a page that "
+        "takes an API key. Serve the console from the HTTPS REST endpoint instead; hash "
+        "routing means no index document is needed."
+    )
+
+
+def test_no_output_hands_out_an_http_url() -> None:
+    """An output is what a person copies. One naming an `http://` URL would be handed to
+    a judge and pasted straight into a browser, whatever the description said."""
+    template = _synth()
+
+    offenders = [
+        name
+        for name, output in template.get("Outputs", {}).items()
+        if "http://" in json.dumps(output["Value"])
+    ]
+
+    assert not offenders, f"these outputs publish a plaintext-HTTP URL: {offenders}"
+
+
 def test_the_bucket_name_is_deterministic() -> None:
     """So GUARDRAIL_CONSOLE_ORIGINS can name this origin before it exists."""
     template = _synth()

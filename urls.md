@@ -49,13 +49,18 @@ directly from the browser; both Function URLs list this origin in their CORS all
 | | |
 | --- | --- |
 | Bucket | `guardrail-console-dev-182355603382` |
-| HTTPS endpoint | `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html` |
-| Website endpoint | `http://guardrail-console-dev-182355603382.s3-website-us-east-1.amazonaws.com` |
+| Endpoint | `https://guardrail-console-dev-182355603382.s3.us-east-1.amazonaws.com/index.html` |
 
-**Use the HTTPS one.** The website endpoint is shorter and supports an index document, but
-S3 website hosting cannot terminate TLS, so it is HTTP only — and this page takes an API
-key. The console routes with `#/`, so the HTTPS REST endpoint works completely: a hash
-never reaches the server, and deep links and refreshes both resolve with no rewrite rule.
+**HTTPS only.** S3's *website* endpoint is HTTP and cannot be anything else — website
+hosting has no TLS setting. This page accepts an API key, and a page delivered over plain
+HTTP can be rewritten in transit into one that looks identical and posts the key
+elsewhere, so website hosting is switched off entirely rather than documented as
+discouraged. `http://…s3-website-us-east-1.amazonaws.com` returns
+`NoSuchWebsiteConfiguration`.
+
+Nothing is lost by that: the console routes with `#/`, so one `index.html` serves every
+route and a hash never reaches the server — deep links and refreshes both resolve with no
+rewrite rule and no index document.
 
 Connect with `GUARDRAIL_CONSOLE_API_KEY` from `.env` (`acme-console-reviewer`, role
 `reviewer`). `GUARDRAIL_API_KEY` also works but is `acme-sim`, role `agent` — it can read

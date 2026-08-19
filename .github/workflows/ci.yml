@@ -179,10 +179,46 @@ jobs:
       - name: Scan for paid resources
         run: uv run python scripts/check_banned_resources.py infra/cdk.out
 
+  deploy-preflight:
+    name: Deploy preflight
+    needs: [quality, console, cost-gate, portability]
+    # `master` is this repository's working branch. The trigger was fixed to include it
+    # in an earlier commit, but this gate was not, so the deploy job had never actually
+    # run -- it looked like continuous deployment and was not.
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    # Same environment as the deploy job, so this reads the same secret scope. Without
+    # it an environment-scoped AWS_DEPLOY_ROLE_ARN would look absent here and present
+    # there, and the deploy would be skipped for a reason that is not true.
+    environment: dev
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      # Deploying needs an IAM role that trusts GitHub's OIDC provider. That provider
+      # does not exist in this account yet, so without this check enabling the branch
+      # gate would turn every push red at the credential step -- a red build that means
+      # "not set up", which is indistinguishable at a glance from "the code is broken".
+      #
+      # Skipping is not the same as passing, and the notice below says which this is.
+      - name: Are deploy credentials configured?
+        id: check
+        env:
+          DEPLOY_ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          if [ -n "$DEPLOY_ROLE" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy role configured; the deploy job will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::AWS_DEPLOY_ROLE_ARN is not set, so this build was NOT deployed. Create an IAM role trusting GitHub's OIDC provider, restricted to this repository, and set it as a secret. Until then, deploys are manual -- see CLAUDE.md."
+          fi
+
   deploy:
     name: Deploy to dev
-    needs: [quality, console, cost-gate, portability]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [deploy-preflight]
+    if: needs.deploy-preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     environment: dev
     permissions:

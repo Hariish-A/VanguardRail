@@ -11,23 +11,28 @@ project would use if it could. **A new AWS account cannot create a distribution 
 support case**, which is the same constraint that removed CloudFront from the service
 stack. So the bucket serves the objects itself.
 
-Two endpoints come out of that, and they are not equivalent:
+## HTTPS only — website hosting is deliberately NOT enabled
 
-* the **REST endpoint** (`https://<bucket>.s3.<region>.amazonaws.com/index.html`) is
-  HTTPS, and is the one to hand to anybody;
-* the **website endpoint** (`http://<bucket>.s3-website-<region>.amazonaws.com`) is
-  prettier and supports an index document, but is **HTTP only** — S3 website hosting
-  cannot terminate TLS.
+S3 offers two ways to serve a bucket, and only one of them can terminate TLS:
 
-The console is a single `index.html` plus hashed assets and routes with `#/`, so the REST
-endpoint works completely: a hash never reaches the server, which means deep links and
-refreshes both resolve without any rewrite rule. HTTPS therefore costs nothing here, and
-the website endpoint is emitted only as a convenience.
+* the **REST endpoint** — `https://<bucket>.s3.<region>.amazonaws.com/index.html`. HTTPS.
+* the **website endpoint** — `http://<bucket>.s3-website-<region>.amazonaws.com`. Shorter,
+  supports an index document, and **HTTP only**. S3 website hosting cannot serve TLS at
+  all; there is no setting for it, and CloudFront is the usual way to add it.
 
-An HTTP page calling an HTTPS API is allowed by browsers — mixed-content blocking runs the
-other way round. It is still worse: the page itself is served unauthenticated over plain
-HTTP and could be tampered with in transit, and this page takes an API key. **Use the
-HTTPS URL.** That is stated in the outputs rather than left for someone to work out.
+This stack originally enabled both and documented the REST one as preferred. That was the
+wrong call. **This page accepts an API key**, and a page delivered over plain HTTP can be
+rewritten in transit by anyone on the path — into a page that looks identical and posts
+the key elsewhere. Documenting the safe URL does not remove the unsafe one: whichever
+endpoint someone pastes into a chat window is the one that gets used.
+
+So website hosting is off, the HTTP hostname returns `NoSuchWebsiteConfiguration`, and
+the only way to reach the console is over TLS. `test_website_hosting_is_not_enabled`
+fails if it ever comes back.
+
+The cost of that is the prettier URL and the index document. Neither is needed: the
+console routes with `#/`, so one `index.html` serves every route, and a hash never
+reaches the server — deep links and refreshes both resolve with no rewrite rule.
 
 ## Cost
 
@@ -95,10 +100,8 @@ class ConsoleStack(Stack):
             self,
             "ConsoleBucket",
             bucket_name=f"guardrail-console-{self.stage}-{self.account}",
-            website_index_document="index.html",
-            # Not a real 404 page: with hash routing every URL resolves to index.html, and
-            # returning it for an unknown path keeps a mistyped link working.
-            website_error_document="index.html",
+            # No website_index_document, and that is the point: configuring one turns on
+            # the s3-website endpoint, which is HTTP only. See the module docstring.
             public_read_access=True,
             block_public_access=s3.BlockPublicAccess(
                 block_public_acls=True,
@@ -173,15 +176,9 @@ class ConsoleStack(Stack):
             self,
             "ConsoleUrl",
             value=https_url,
-            description="The console. HTTPS — hand out this one.",
-        )
-        CfnOutput(
-            self,
-            "ConsoleWebsiteUrl",
-            value=bucket.bucket_website_url,
             description=(
-                "S3 website endpoint. Shorter, but HTTP only — S3 website hosting cannot "
-                "terminate TLS. Prefer ConsoleUrl, which is HTTPS."
+                "The console. The only endpoint -- website hosting is off, so the HTTP "
+                "s3-website hostname does not serve this bucket."
             ),
         )
         CfnOutput(
