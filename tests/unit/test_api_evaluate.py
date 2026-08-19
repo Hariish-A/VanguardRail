@@ -374,3 +374,121 @@ def test_requests_without_an_idempotency_key_are_never_deduplicated(
         _evaluate(client, "file.read", {"path": "/tmp/x"})
 
     assert client.get("/v1/audit", headers={"x-api-key": API_KEY}).json()["count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# CloudWatch cost
+# ---------------------------------------------------------------------------
+
+
+def _emitted_series(client: TestClient, capfd: pytest.CaptureFixture[str]) -> set[str]:
+    """Drive a spread of outcomes, in both modes, and collect the billed series.
+
+    Behavioural on purpose. A test that read `METRIC_CARDINALITY` and checked it summed
+    to ten would pass forever while the code emitted something else -- the declared
+    budget was already wrong in exactly that way before this test existed.
+
+    **`capfd`, not `capsys`.** Powertools writes EMF at the file-descriptor level, which
+    the sys-level `capsys` fixture does not see; with `capsys` this captured nothing and
+    the assertions below passed vacuously.
+
+    The cases deliberately map **several tools onto the same outcome**. With one tool per
+    outcome, adding a `tool` dimension would not raise the series count at all, and the
+    test would wave through the exact mistake it exists to catch.
+    """
+    import json as json_module
+
+    cases = [
+        ("db.delete_records", {"count": 500}),  # block
+        ("file.read", {"path": "/home/a/.ssh/id_rsa"}),  # block, a second tool
+        ("db.delete_records", {"count": 5}),  # allow
+        ("email.send", {"to": ["bob@acme-corp.com"]}),  # allow, a second tool
+        ("http.request", {"method": "GET", "url": "https://x.acme-corp.com"}),  # allow, a third
+        ("file.read", {"path": "/srv/confidential/q3.pdf"}),  # log_and_allow
+        ("email.send", {"to": ["a@external.com"]}),  # require_hitl
+    ]
+
+    capfd.readouterr()  # discard anything emitted before this point
+    for dry_run in (False, True):
+        for tool, arguments in cases:
+            _evaluate(client, tool, arguments, dry_run=dry_run)
+
+    series: set[str] = set()
+    for line in capfd.readouterr().out.splitlines():
+        line = line.strip()
+        if not line.startswith("{") or '"_aws"' not in line:
+            continue
+        blob = json_module.loads(line)
+        for group in blob["_aws"]["CloudWatchMetrics"]:
+            for metric in group["Metrics"]:
+                for dimension_set in group["Dimensions"]:
+                    key = ",".join(f"{d}={blob[d]}" for d in sorted(dimension_set))
+                    series.add(f"{metric['Name']}[{key}]")
+    return series
+
+
+def test_the_metric_capture_is_not_empty(
+    client: TestClient, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Guards the guard.
+
+    The two budget tests below iterate captured EMF blobs. If the capture ever returned
+    nothing they would pass while the service emitted anything it liked -- which is
+    precisely what happened on the first attempt, using `capsys`.
+    """
+    series = _emitted_series(client, capfd)
+
+    assert series, "no EMF blobs captured; the budget assertions would be vacuous"
+    assert any(s.startswith("decisions[") for s in series), sorted(series)
+    assert any(s.startswith("dry_run.decisions[") for s in series), sorted(series)
+
+
+def test_metric_cardinality_stays_inside_the_free_tier(
+    client: TestClient, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The $0 commitment, enforced rather than remembered.
+
+    CloudWatch's free tier is 10 custom metrics, counted as unique name + dimension-value
+    pairs, and there is no way back into it once exceeded. Adding an `agent_id` or `tool`
+    dimension to `decisions` looks harmless in review and silently multiplies the bill.
+
+    If this fails: do not raise the limit. Move the new signal into a structured log and
+    query it through Logs Insights, which the 5 GB log allowance covers.
+    """
+    from guardrail_service.observability import FREE_TIER_CUSTOM_METRICS
+
+    series = _emitted_series(client, capfd)
+
+    assert series, "no EMF blobs captured; this test would pass vacuously"
+    assert len(series) <= FREE_TIER_CUSTOM_METRICS, (
+        f"{len(series)} billed CloudWatch series, over the free {FREE_TIER_CUSTOM_METRICS}: "
+        f"{sorted(series)}"
+    )
+
+
+def test_declared_metric_cardinality_matches_what_is_emitted(
+    client: TestClient, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Keeps the documented budget honest.
+
+    The original budget claimed `dry_run.decisions` was one billed series when it carries
+    an `outcome` dimension and is therefore four, and reserved three slots for metrics no
+    code path emits. Both errors survived review because nothing compared the document to
+    reality.
+    """
+    from guardrail_service.observability import METRIC_CARDINALITY
+
+    counts: dict[str, int] = {}
+    for entry in _emitted_series(client, capfd):
+        name = entry.split("[", 1)[0]
+        counts[name] = counts.get(name, 0) + 1
+
+    assert counts, "no EMF blobs captured; this test would pass vacuously"
+    for name, observed in sorted(counts.items()):
+        assert name in METRIC_CARDINALITY, (
+            f"metric {name!r} is emitted but not declared in METRIC_CARDINALITY, so the "
+            "cost budget does not account for it"
+        )
+        assert observed <= METRIC_CARDINALITY[name], (
+            f"metric {name!r} emitted {observed} series, budgeted for {METRIC_CARDINALITY[name]}"
+        )

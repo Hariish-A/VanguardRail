@@ -63,20 +63,38 @@ def tracing_enabled() -> bool:
     return _settings.stage != "local"
 
 
-METRIC_BUDGET: frozenset[str] = frozenset(
-    {
-        "decisions",  # x4 outcome dimensions = 4 billed metrics
-        "evaluate.latency_ms",
-        "fail_closed_events",
-        "hitl.queue_age_seconds",
-        "policy.version",
-        "errors",
-        "dry_run.decisions",
-    }
-)
-"""The complete set of permitted metric names — 10 billed metrics once dimensions expand.
+FREE_TIER_CUSTOM_METRICS = 10
+"""CloudWatch's always-free allowance, in **billed series** — not in metric names.
 
-CloudWatch's free tier is 10 custom metrics in total and there is no way to buy back
-into it, so any new metric must displace an existing one. Anything finer-grained
-belongs in a structured log line and is queried through Logs Insights.
+Each unique name + dimension-value combination is billed separately, and there is no way
+to buy back into the free tier once it is exceeded.
 """
+
+METRIC_CARDINALITY: dict[str, int] = {
+    # `outcome` takes one of the four effect names, so each of these expands to four
+    # billed series rather than one.
+    "decisions": 4,
+    "dry_run.decisions": 4,
+    # One `stage` per deployment, and a stage deploys its own account-independent series.
+    "evaluate.latency_ms": 1,
+    "policy.version": 1,
+}
+"""Every metric this service emits, and how many billed series each becomes.
+
+**This budget is full: 4 + 4 + 1 + 1 = 10 of 10.** Adding any metric now costs money, so
+a new one must displace an existing one. Anything finer-grained — per rule, per tenant,
+per agent — belongs in a structured log line and is queried through Logs Insights, which
+is covered by the far larger 5 GB log allowance.
+
+The arithmetic here was wrong in the original plan, which counted `dry_run.decisions` as
+one series and reserved slots for `fail_closed_events`, `hitl.queue_age_seconds`, and
+`errors`. `dry_run.decisions` carries an `outcome` dimension, so it is four; and the
+three reserved names are not emitted by any code path. Implementing them as written would
+take the total to 13 and start billing — which is exactly the kind of thing that is
+discovered on an invoice rather than in review, so
+`test_metric_cardinality_stays_inside_the_free_tier` now asserts it against the metrics
+actually emitted.
+"""
+
+METRIC_BUDGET: frozenset[str] = frozenset(METRIC_CARDINALITY)
+"""The permitted metric names. Kept as a name set for callers that only need membership."""

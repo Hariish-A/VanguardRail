@@ -20,8 +20,16 @@ user's choice, both still on disk.
    one. Current usage is **15 WCU / 15 RCU of the free 25** (table 5/5 + two GSIs 5/5).
    Any new index or table must fit the remaining 10/10.
 3. **CloudWatch free tier is 10 custom metrics total**, and each name+dimension pair
-   counts separately. Budget is defined in `observability.py::METRIC_BUDGET` and is full.
-   Anything finer-grained goes in a structured log and is queried via Logs Insights.
+   counts separately. **The budget is exactly full: 10/10.** `decisions` x4 outcomes,
+   `dry_run.decisions` x4 outcomes, `evaluate.latency_ms`, `policy.version`. Declared in
+   `observability.py::METRIC_CARDINALITY` and **enforced** by
+   `test_metric_cardinality_stays_inside_the_free_tier`, which counts the series the
+   service actually emits. Adding any metric or any dimension now costs money -- a new
+   one must displace an existing one. Anything finer-grained goes in a structured log and
+   is queried via Logs Insights.
+   The original plan's arithmetic was wrong: it counted `dry_run.decisions` as 1 (it is 4)
+   and reserved slots for `fail_closed_events`, `hitl.queue_age_seconds`, and `errors`,
+   which no code path emits. Implementing those three as written would reach 13 and bill.
 4. **Free LLM only.** Ollama + `qwen3:latest` locally. Bedrock is banned (pay-per-token).
 5. **Every milestone ends deployed and verified against live AWS**, not just tested.
 6. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
