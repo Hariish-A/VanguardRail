@@ -17,8 +17,8 @@ measure Ollama rather than the guardrail and would make the numbers meaningless.
 
 The audit table is provisioned at **5 WCU**, and every evaluation writes exactly one audit
 record. So sustained throughput is bounded at roughly **5 writes per second** before
-DynamoDB throttles -- and Lambda reserved concurrency caps containers at 10. Those are the
-real numbers, and a report that quoted a burst figure without them would be describing a
+DynamoDB throttles -- and the account concurrency quota caps containers at 10. Those are
+the real numbers, and a report quoting a burst figure without them would be describing a
 different system.
 
 Throttling here is **correct behaviour, not failure**: the free tier is a deliberate
@@ -76,7 +76,7 @@ def percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, int(round(p / 100 * len(ordered) + 0.5)) - 1))
+    index = max(0, min(len(ordered) - 1, round(p / 100 * len(ordered) + 0.5) - 1))
     return ordered[index]
 
 
@@ -137,18 +137,20 @@ def main(argv: list[str] | None = None) -> int:
     started_at = time.monotonic()
     deadline = started_at + args.duration
 
-    with httpx.Client(
-        base_url=base,
-        timeout=30.0,
-        headers={"x-api-key": args.api_key, "content-type": "application/json"},
-        limits=httpx.Limits(
-            max_connections=args.concurrency * 2,
-            max_keepalive_connections=args.concurrency,
-        ),
-    ) as client:
-        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            for i in range(args.concurrency):
-                pool.submit(worker, client, results, deadline, i)
+    with (
+        httpx.Client(
+            base_url=base,
+            timeout=30.0,
+            headers={"x-api-key": args.api_key, "content-type": "application/json"},
+            limits=httpx.Limits(
+                max_connections=args.concurrency * 2,
+                max_keepalive_connections=args.concurrency,
+            ),
+        ) as client,
+        ThreadPoolExecutor(max_workers=args.concurrency) as pool,
+    ):
+        for i in range(args.concurrency):
+            pool.submit(worker, client, results, deadline, i)
 
     wall = time.monotonic() - started_at
     total = sum(results.statuses.values())
@@ -192,7 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         "  The ceiling this ran against",
         "    DynamoDB      : 5 provisioned WCU -- one audit write per evaluation, so",
         "                    sustained throughput is bounded near 5 writes/second.",
-        "    Lambda        : reserved concurrency 10.",
+        "    Lambda        : account concurrency quota 10 (new-account default; a",
+        "                    per-function reservation is impossible below that).",
         "    Rate limiter  : 600/min per tenant per container.",
         "",
         "    Throttling is correct behaviour here, not failure. The free tier is a",

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -56,7 +57,32 @@ GENESIS_HASH = "0" * 64
 """Predecessor hash of the first record in a tenant's chain."""
 
 MAX_WRITE_ATTEMPTS = 6
-"""Bounded retries on sequence contention before failing closed."""
+"""Bounded retries before failing closed."""
+
+WRITE_DEADLINE_SECONDS = 5.0
+"""Total time the append loop may spend before giving up.
+
+The Lambda timeout is 10 seconds. Without a deadline of its own, a retry loop plus
+botocore's internal retries can outlast it -- and a killed invocation produces a bare
+platform error with **no application log line at all**, so the operator sees a 5xx with
+no cause. Failing cleanly at 5s leaves room to log, return 503, and tell the client how
+long to wait.
+"""
+
+THROTTLING_CODES = frozenset(
+    {
+        "ProvisionedThroughputExceededException",
+        "ThrottlingException",
+        "RequestLimitExceeded",
+        "TransactionConflictException",
+    }
+)
+"""Errors meaning "try again shortly", as opposed to "this request is wrong".
+
+At 5 provisioned WCU, `ProvisionedThroughputExceededException` is by far the most likely
+real failure this repository will ever see -- and it was originally the one case the
+retry loop did not handle. See `append`.
+"""
 
 IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 """How long a decision is remembered against its idempotency key.
@@ -373,11 +399,26 @@ class DynamoDBAuditRepository:
 
     @property
     def client(self) -> Any:
-        """Lazily created, so importing this module needs no AWS credentials."""
+        """Lazily created, so importing this module needs no AWS credentials.
+
+        Timeouts and retries are bounded explicitly. botocore's defaults retry throttling
+        several times with its own backoff, which compounds with the retry loop in
+        `append` and can outlast the 10-second Lambda timeout -- and a killed invocation
+        logs nothing, so the operator gets a 5xx with no cause. Keeping botocore's
+        attempts low leaves this repository in control of the timing.
+        """
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("dynamodb")
+            self._client = boto3.client(
+                "dynamodb",
+                config=Config(
+                    retries={"max_attempts": 2, "mode": "standard"},
+                    connect_timeout=2,
+                    read_timeout=3,
+                ),
+            )
         return self._client
 
     # -- serialization -------------------------------------------------
@@ -418,15 +459,35 @@ class DynamoDBAuditRepository:
         return AuditRecord.from_item(self._deserialize(items[0]))
 
     def append(self, tenant_id: str, build: RecordBuilder) -> AuditRecord:
-        """Append one record, retrying on sequence contention.
+        """Append one record, retrying contention **and throttling**.
 
-        Raises AuditWriteError once retries are exhausted. Callers must treat that as a
-        failed evaluation: returning a decision we could not record would defeat the
-        purpose of the system.
+        Two distinct retryable failures, deliberately handled with different backoff:
+
+        * **Sequence contention** (`ConditionalCheckFailedException`) -- another writer
+          claimed this slot. Re-read and retry almost immediately; the winner has already
+          finished, so waiting long achieves nothing.
+        * **Throttling** -- the table is at its provisioned ceiling. Retrying fast makes
+          it strictly worse, so this backs off harder and with jitter, so that concurrent
+          writers do not resynchronise into a second thundering herd.
+
+        Throttling was originally not handled here at all: any code other than
+        `ConditionalCheckFailedException` re-raised on the first attempt. Since the table
+        is provisioned at 5 WCU, `ProvisionedThroughputExceededException` is the most
+        likely failure in production, and it escaped as a raw `ClientError` -- surfacing
+        as an unhandled **500** rather than the fail-closed **503** the SDK and the docs
+        both promise, with no `audit_write_failed` log line to explain it. A 180-second
+        load test surfaced 92 of them.
+
+        Raises AuditWriteError once retries or the deadline are exhausted. Callers must
+        treat that as a failed evaluation: returning a decision that could not be recorded
+        would defeat the purpose of the system.
         """
         from botocore.exceptions import ClientError
 
         last_error: Exception | None = None
+        throttled = False
+        contended = False
+        deadline = time.monotonic() + WRITE_DEADLINE_SECONDS
 
         for attempt in range(MAX_WRITE_ATTEMPTS):
             latest = self._latest(tenant_id)
@@ -442,19 +503,45 @@ class DynamoDBAuditRepository:
                     ConditionExpression="attribute_not_exists(sk)",
                 )
             except ClientError as exc:
-                if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                    raise
-                # Another writer claimed this sequence number. Re-read and retry with
-                # a short randomised backoff so contending writers do not resynchronise.
+                code = exc.response["Error"]["Code"]
                 last_error = exc
-                time.sleep(0.02 * (2**attempt))
+
+                if code == "ConditionalCheckFailedException":
+                    contended = True
+                    backoff = 0.02 * (2**attempt)
+                elif code in THROTTLING_CODES:
+                    throttled = True
+                    backoff = 0.1 * (2**attempt)
+                else:
+                    # Genuinely wrong -- bad key, missing table, denied permission.
+                    # Retrying cannot help and would only delay a clear failure.
+                    raise
+
+                # Full jitter. Without it every throttled writer wakes together and the
+                # table is thrown straight back into the ceiling it just recovered from.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(random.uniform(0, backoff), remaining))  # noqa: S311
                 continue
             else:
                 return record
 
+        # Both causes routinely occur together under load -- the table throttles, and the
+        # writers that do get through race for the same sequence number. Reporting only
+        # one produced messages like "at its provisioned write capacity
+        # (ConditionalCheckFailedException)", which reads as a contradiction to whoever
+        # is holding the incident.
+        causes = []
+        if throttled:
+            causes.append("the table reached its provisioned write capacity")
+        if contended:
+            causes.append("concurrent writers contended for the same sequence number")
+        reason = " and ".join(causes) or "an unknown transient failure"
+
         raise AuditWriteError(
-            f"could not append audit record after {MAX_WRITE_ATTEMPTS} attempts "
-            f"under sequence contention: {last_error}"
+            f"could not append audit record after {MAX_WRITE_ATTEMPTS} attempts: "
+            f"{reason}. Last error: {last_error}"
         )
 
     def list_records(
@@ -536,8 +623,15 @@ class DynamoDBAuditRepository:
                 ConditionExpression="attribute_not_exists(sk)",
             )
         except ClientError as exc:
-            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                raise
+            code = exc.response["Error"]["Code"]
+            if code == "ConditionalCheckFailedException":
+                return
+            if code in THROTTLING_CODES:
+                # The decision is already in the chain. Losing idempotency for one
+                # request is far less serious than failing an action that was correctly
+                # evaluated and recorded, so a throttle here is logged, not raised.
+                return
+            raise
 
     def verify_chain(self, tenant_id: str, *, limit: int = 1000) -> ChainVerification:
         """Walk the chain oldest-first and check every link."""

@@ -124,8 +124,31 @@ PLACEHOLDER_ASSET = Path(__file__).parent.parent / "placeholder"
 # Setting GUARDRAIL_ENABLE_CLOUDFRONT=true restores the distribution once an account is
 # verified, for edge caching and a custom domain. Nothing else in the system changes:
 # BaseUrl is emitted either way, so the SDK and smoke tests never learn which is active.
-RESERVED_CONCURRENCY = int(os.environ.get("GUARDRAIL_RESERVED_CONCURRENCY", "10"))
-"""Hard cap on concurrent executions. See the comment at its use site."""
+_RESERVED = os.environ.get("GUARDRAIL_RESERVED_CONCURRENCY", "").strip()
+RESERVED_CONCURRENCY: int | None = (
+    int(_RESERVED) if _RESERVED.isdigit() and _RESERVED != "0" else None
+)
+"""Per-function concurrency reservation. **Unset by default, and it has to be.**
+
+A brand-new AWS account has a total `ConcurrentExecutions` quota of **10**, and AWS
+refuses any reservation that would drop *unreserved* concurrency below 10. On this
+account the maximum reservable value is therefore exactly **zero** -- the first deploy
+attempt failed with "decreases account's UnreservedConcurrentExecution below its minimum
+value of [10]".
+
+The ceiling has not gone away, it is simply enforced one level up: the account-wide quota
+of 10 bounds concurrent containers just as effectively as a per-function reservation
+would. What is lost is *isolation* -- with several functions in the account they would
+compete for the same 10 -- and there is only one function here.
+
+Set this once the account quota is raised, which is a support request rather than a code
+change. `ACCOUNT_CONCURRENCY_CEILING` below is what the rate limiter's global bound is
+actually computed against either way.
+"""
+
+ACCOUNT_CONCURRENCY_CEILING = int(os.environ.get("GUARDRAIL_CONCURRENCY_CEILING", "10"))
+"""Concurrent containers the account permits. The multiplier on the in-process
+per-tenant rate limit, and the number `global_ceiling()` should be given."""
 
 ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "false").lower() in {
     "1",
@@ -364,16 +387,13 @@ class ServiceStack(Stack):
             # 400,000 GB-second allowance.
             memory_size=512,
             timeout=Duration.seconds(10),
-            # The hard ceiling. The per-tenant rate limiter runs in-process, so its real
-            # global bound is `containers x per-container rate` -- this is what bounds the
-            # container count, and AWS enforces it rather than the application.
+            # Omitted on this account -- see RESERVED_CONCURRENCY. The account-wide
+            # quota of 10 provides the same ceiling, which is what bounds the in-process
+            # rate limiter's true global rate and what stops a runaway agent outrunning
+            # 5 provisioned WCU.
             #
-            # It also protects the free tier from the other direction: 10 concurrent
-            # containers cannot outrun 5 provisioned WCU for long, so a runaway agent
-            # throttles on DynamoDB rather than quietly generating a bill.
-            #
-            # Reserved concurrency is free. *Provisioned* concurrency is the one that
-            # costs money, and is deliberately not used.
+            # Reserved concurrency is free when it can be set at all. *Provisioned*
+            # concurrency is the one that costs money, and is deliberately never used.
             reserved_concurrent_executions=RESERVED_CONCURRENCY,
             log_group=log_group,
             environment={
@@ -396,7 +416,12 @@ class ServiceStack(Stack):
                 "GUARDRAIL_RATE_LIMIT_PER_MINUTE": os.environ.get(
                     "GUARDRAIL_RATE_LIMIT_PER_MINUTE", "600"
                 ),
-                "GUARDRAIL_RESERVED_CONCURRENCY": str(RESERVED_CONCURRENCY),
+                # The effective ceiling, whether it comes from a per-function
+                # reservation or from the account quota. The service reports the
+                # limiter's true global bound from this.
+                "GUARDRAIL_RESERVED_CONCURRENCY": str(
+                    RESERVED_CONCURRENCY or ACCOUNT_CONCURRENCY_CEILING
+                ),
                 "GUARDRAIL_STAGE": stage,
                 "GUARDRAIL_VERSION": version,
                 "GUARDRAIL_LOG_LEVEL": "INFO" if stage == "prod" else "DEBUG",

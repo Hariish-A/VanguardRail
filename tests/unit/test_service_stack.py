@@ -47,7 +47,12 @@ def _synth(*, enable_cloudfront: bool, overrides: dict[str, str] | None = None) 
     # and `test_policy_administration_is_closed_by_default` failed locally while passing
     # in CI. A test whose result moves with ambient state cannot be trusted in either
     # direction -- it can mask a regression as easily as invent one.
-    for name in ("GUARDRAIL_POLICY_ADMIN_KEY_IDS", "GUARDRAIL_POLICY_REFRESH_SECONDS"):
+    for name in (
+        "GUARDRAIL_POLICY_ADMIN_KEY_IDS",
+        "GUARDRAIL_POLICY_REFRESH_SECONDS",
+        "GUARDRAIL_RESERVED_CONCURRENCY",
+        "GUARDRAIL_RATE_LIMIT_PER_MINUTE",
+    ):
         os.environ.pop(name, None)
     for name, value in (overrides or {}).items():
         os.environ[name] = value
@@ -76,6 +81,8 @@ def _restore_env() -> Iterator[None]:
         "GUARDRAIL_ENABLE_CLOUDFRONT",
         "GUARDRAIL_POLICY_ADMIN_KEY_IDS",
         "GUARDRAIL_POLICY_REFRESH_SECONDS",
+        "GUARDRAIL_RESERVED_CONCURRENCY",
+        "GUARDRAIL_RATE_LIMIT_PER_MINUTE",
     )
     saved = {name: os.environ.get(name) for name in watched}
     yield
@@ -389,14 +396,35 @@ def test_alarms_do_not_fire_on_an_idle_service() -> None:
         )
 
 
-def test_concurrency_is_reserved_but_never_provisioned() -> None:
-    """Reserved concurrency is free and is the hard ceiling the in-process rate limiter
-    leans on. *Provisioned* concurrency is the one that bills, and must never appear."""
+def test_provisioned_concurrency_is_never_used() -> None:
+    """*Provisioned* concurrency bills by the hour and must never appear. Reserved
+    concurrency is the free one, handled separately below."""
     template = _synth(enable_cloudfront=False)
-
-    function = _resources_of_type(template, "AWS::Lambda::Function")[0]
-    assert function["Properties"].get("ReservedConcurrentExecutions") == 10
 
     assert not _resources_of_type(template, "AWS::Lambda::ProvisionedConcurrencyConfig"), (
         "provisioned concurrency costs money"
     )
+
+
+def test_reserved_concurrency_is_unset_by_default() -> None:
+    """It has to be, on this account.
+
+    A new AWS account has a total ConcurrentExecutions quota of 10, and AWS rejects any
+    reservation that would leave fewer than 10 unreserved -- so the maximum reservable
+    value here is exactly zero. The first deploy attempt failed on precisely that. The
+    ceiling still exists; the account quota enforces it instead.
+    """
+    template = _synth(enable_cloudfront=False)
+
+    function = _resources_of_type(template, "AWS::Lambda::Function")[0]
+    assert "ReservedConcurrentExecutions" not in function["Properties"]
+
+
+def test_reserved_concurrency_is_applied_once_the_quota_allows_it() -> None:
+    """The other half of the contract. Asserting only the default would pass just as well
+    if the setting had been dropped entirely, leaving it impossible to enable when the
+    account quota is eventually raised."""
+    template = _synth(enable_cloudfront=False, overrides={"GUARDRAIL_RESERVED_CONCURRENCY": "50"})
+
+    function = _resources_of_type(template, "AWS::Lambda::Function")[0]
+    assert function["Properties"].get("ReservedConcurrentExecutions") == 50

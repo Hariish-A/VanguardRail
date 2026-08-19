@@ -6,7 +6,13 @@ to make overspend loud.
 
 It is deployed once (it is account-wide, not per-stage) and deliberately kept separate
 from the service stack: a `cdk destroy` of the service must never take the alarm with
-it. Budgets themselves are free, and so are the first two SNS email notifications.
+it.
+
+AWS Budgets allows two budgets free of charge, which is what this costs: one. The
+earlier wording here said "the first two SNS email notifications", conflating the free
+budget allowance with SNS delivery -- they are separate allowances and the sentence was
+misleading about both. Budget notifications are delivered by AWS to the address below;
+the alarm notifications for the service stack use a separate SNS topic.
 """
 
 from __future__ import annotations

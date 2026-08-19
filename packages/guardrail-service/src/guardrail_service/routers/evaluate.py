@@ -255,6 +255,10 @@ def _persist(
                 "The decision could not be recorded, so no decision is returned. "
                 "A fail-closed client should block the action."
             ),
+            # The commonest cause is the audit table hitting its provisioned write
+            # ceiling, which clears on its own. Telling the client how long to wait turns
+            # a retry storm into an orderly back-off.
+            headers={"Retry-After": "2"},
         ) from exc
 
 

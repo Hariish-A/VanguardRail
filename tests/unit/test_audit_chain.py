@@ -20,6 +20,8 @@ import pytest
 from guardrail_service.storage.audit import (
     GENESIS_HASH,
     AuditRecord,
+    AuditWriteError,
+    DynamoDBAuditRepository,
     InMemoryAuditRepository,
     canonical_json,
     compute_hash,
@@ -318,3 +320,122 @@ def test_hashes_are_unique_across_the_chain() -> None:
     hashes = [r.hash for r in repo.list_records("acme", limit=100)]
 
     assert len(hashes) == len(set(hashes))
+
+
+# ---------------------------------------------------------------------------
+# Throttling -- found by a 180-second load test, not by review
+# ---------------------------------------------------------------------------
+
+
+def _throttle(code: str = "ProvisionedThroughputExceededException") -> Any:
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": "exceeded"}}, "PutItem")
+
+
+class _FakeDynamo:
+    """A DynamoDB client that fails a set number of writes before succeeding."""
+
+    def __init__(self, error: Any, *, fail_times: int = 999) -> None:
+        self.error = error
+        self.fail_times = fail_times
+        self.attempts = 0
+
+    def query(self, **kwargs: Any) -> dict[str, Any]:
+        return {"Items": []}
+
+    def put_item(self, **kwargs: Any) -> dict[str, Any]:
+        self.attempts += 1
+        if self.attempts <= self.fail_times:
+            raise self.error
+        return {}
+
+
+def _build(seq: int, prev_hash: str) -> AuditRecord:
+    return AuditRecord(
+        tenant_id="acme",
+        seq=seq,
+        timestamp="2026-08-19T00:00:00.000+00:00",
+        payload={"effect": "allow", "session_id": "s"},
+        prev_hash=prev_hash,
+        hash="h",
+    )
+
+
+def test_a_throttled_write_fails_closed_rather_than_escaping_raw() -> None:
+    """**The bug a load test found and review did not.**
+
+    `append` originally re-raised anything that was not a ConditionalCheckFailedException,
+    on the first attempt. The table is provisioned at 5 WCU, so throttling is the most
+    likely failure it will ever see -- and it escaped as a raw ClientError, surfacing as
+    an unhandled 500 instead of the fail-closed 503 the SDK and the docs both promise,
+    with no `audit_write_failed` line to explain it. A 180s load test produced 92.
+    """
+    client = _FakeDynamo(_throttle())
+    repository = DynamoDBAuditRepository("t", client=client)
+
+    with pytest.raises(AuditWriteError, match="provisioned write capacity"):
+        repository.append("acme", _build)
+
+    assert client.attempts > 1, "throttling must be retried, not surrendered to instantly"
+
+
+def test_a_throttled_write_recovers_when_capacity_returns() -> None:
+    """Retrying has to actually work, or the retry loop is just a slower failure."""
+    client = _FakeDynamo(_throttle(), fail_times=2)
+    repository = DynamoDBAuditRepository("t", client=client)
+
+    record = repository.append("acme", _build)
+
+    assert record.seq == 1
+    assert client.attempts == 3
+
+
+def test_the_write_loop_finishes_inside_the_lambda_timeout() -> None:
+    """A retry budget longer than the 10s function timeout is worse than no retry at all:
+    the invocation is killed, the platform logs a bare error, and the operator gets a 5xx
+    with no application log line explaining any of it."""
+    import time as time_module
+
+    from guardrail_service.storage.audit import WRITE_DEADLINE_SECONDS
+
+    repository = DynamoDBAuditRepository("t", client=_FakeDynamo(_throttle()))
+
+    started = time_module.monotonic()
+    with pytest.raises(AuditWriteError):
+        repository.append("acme", _build)
+    elapsed = time_module.monotonic() - started
+
+    assert elapsed < WRITE_DEADLINE_SECONDS + 1.0, f"took {elapsed:.1f}s"
+    assert WRITE_DEADLINE_SECONDS < 10.0, "the deadline must sit inside the Lambda timeout"
+
+
+def test_a_genuine_error_is_not_retried() -> None:
+    """A denied permission or a missing table cannot be fixed by waiting. Retrying would
+    turn a clear, immediate failure into a slow mysterious one."""
+    client = _FakeDynamo(_throttle("AccessDeniedException"))
+    repository = DynamoDBAuditRepository("t", client=client)
+
+    with pytest.raises(Exception) as caught:
+        repository.append("acme", _build)
+
+    assert not isinstance(caught.value, AuditWriteError)
+    assert client.attempts == 1, "a permanent error must fail on the first attempt"
+
+
+def test_sequence_contention_is_still_retried() -> None:
+    """The original behaviour must survive the throttling fix."""
+    client = _FakeDynamo(_throttle("ConditionalCheckFailedException"), fail_times=2)
+    repository = DynamoDBAuditRepository("t", client=client)
+
+    assert repository.append("acme", _build).seq == 1
+    assert client.attempts == 3
+
+
+def test_a_throttled_idempotency_write_does_not_fail_the_request() -> None:
+    """The decision is already in the chain by then. Losing idempotency for one request
+    is far less serious than failing an action that was correctly evaluated and
+    recorded."""
+    repository = DynamoDBAuditRepository("t", client=_FakeDynamo(_throttle()))
+
+    repository.store_idempotent("acme", "key-1", {"decision": "allow"})  # must not raise

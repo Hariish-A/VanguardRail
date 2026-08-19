@@ -31,7 +31,16 @@ COPY infra/pyproject.toml infra/
 
 COPY packages/ packages/
 
-RUN uv pip install --system --no-cache \
+# `--no-editable` is load-bearing, not tidiness. Without it uv honours the workspace
+# sources in guardrail-service's pyproject and installs guardrail-core as an editable:
+# site-packages gets a .pth file pointing at /build/packages/guardrail-core/src, which
+# exists only in this stage. Copying site-packages into the runtime stage then carries
+# a dangling pointer and the container dies at import with
+# "ModuleNotFoundError: No module named guardrail_core".
+#
+# The image had never been built and run until M5, so this shipped broken from M0
+# while the Dockerfile claimed to prove portability.
+RUN uv pip install --system --no-cache --no-editable \
     ./packages/guardrail-core \
     ./packages/guardrail-service \
     "uvicorn[standard]>=0.30"
