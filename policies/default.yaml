@@ -141,3 +141,62 @@ rules:
           value: credentials
     effect: block
     message: "Blocked: {derived.path} looks like a credential store."
+
+  # --- Governing an MCP server that knows nothing about Guardrail ------------
+  #
+  # `guardrail-mcp` proxies any MCP server and evaluates every `tools/call` before
+  # forwarding it, prefixing each tool with the server name. So the reference
+  # filesystem server's `read_file` is addressed here as `filesystem.read_file`.
+  #
+  # The prefix is what keeps two servers that both expose `read_file` separable. A rule
+  # written against the bare name would silently govern whichever one happened to run.
+
+  - id: mcp-credential-read-block
+    description: >-
+      Secrets are never readable through a proxied MCP filesystem server, whatever the
+      agent's stated intent. This is the rule that fires when a third-party server is
+      asked for something it would happily have returned.
+    severity: critical
+    match:
+      tool: filesystem.*
+      any:
+        - path: derived.path
+          op: icontains
+          value: /.ssh/
+        - path: derived.path
+          op: icontains
+          value: .env
+        - path: derived.path
+          op: icontains
+          value: id_rsa
+        - path: derived.path
+          op: icontains
+          value: credentials
+        - path: derived.path
+          op: icontains
+          value: secret
+    effect: block
+    message: >-
+      Blocked: {derived.path} looks like a credential store, and this MCP server is
+      proxied through Guardrail. The file was not read.
+
+  - id: mcp-write-requires-review
+    description: >-
+      Reading through a proxied server is cheap to undo; writing is not. Any mutation of
+      the filesystem waits for a human.
+    severity: high
+    match:
+      tool: filesystem.*
+      any:
+        - path: tool
+          op: in
+          value:
+            - filesystem.write_file
+            - filesystem.edit_file
+            - filesystem.move_file
+            - filesystem.create_directory
+    effect: require_hitl
+    hitl:
+      timeout_seconds: 900
+      on_timeout: deny
+    message: "Held for review: {tool} would modify the filesystem at {derived.path}."

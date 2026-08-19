@@ -9,6 +9,11 @@ dependencies = [
     "pydantic>=2.9",
 ]
 
+[project.scripts]
+# The MCP proxy runs as a command an MCP client launches, so it needs a console
+# entry point rather than a module path.
+guardrail-mcp = "guardrail_sdk.mcp:stdio_main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

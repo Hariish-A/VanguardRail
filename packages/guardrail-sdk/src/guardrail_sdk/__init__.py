@@ -11,6 +11,15 @@
 Fail-closed by default: if the guardrail cannot be reached, the tool does not run.
 """
 
+from guardrail_sdk.adapters import (
+    GuardedToolDispatcher,
+    GuardrailCallbackHandler,
+    guard_langchain_tool,
+    guard_openai_tool_calls,
+    make_langchain_handler,
+    pending_text,
+    refusal_text,
+)
 from guardrail_sdk.client import CircuitBreaker, GuardrailClient
 from guardrail_sdk.decorator import (
     AgentContext,
@@ -27,6 +36,7 @@ from guardrail_sdk.exceptions import (
     GuardrailError,
     GuardrailUnavailable,
 )
+from guardrail_sdk.mcp import MCPGuardrailProxy, ProxyDecision, ProxyStats
 from guardrail_sdk.models import Decision, DecisionStatus, HitlInfo, MatchedRule
 
 __all__ = [
@@ -36,15 +46,25 @@ __all__ = [
     "CircuitBreaker",
     "Decision",
     "DecisionStatus",
+    "GuardedToolDispatcher",
+    "GuardrailCallbackHandler",
     "GuardrailClient",
     "GuardrailError",
     "GuardrailUnavailable",
     "HitlInfo",
+    "MCPGuardrailProxy",
     "MatchedRule",
+    "ProxyDecision",
+    "ProxyStats",
     "get_client",
     "get_context",
     "governed_tool",
+    "guard_langchain_tool",
+    "guard_openai_tool_calls",
     "last_decision",
+    "make_langchain_handler",
+    "pending_text",
+    "refusal_text",
     "set_client",
     "set_context",
 ]

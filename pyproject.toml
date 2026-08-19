@@ -78,7 +78,10 @@ plugins = ["pydantic.mypy"]
 exclude = ["infra/cdk.out", "build", "dist"]
 
 [[tool.mypy.overrides]]
-module = ["mangum.*", "aws_cdk.*", "constructs.*"]
+# LangChain is an OPTIONAL integration: the SDK is installed by agent teams who should
+# not inherit a framework they do not use, so the import lives inside a function and the
+# handler class is built dynamically.
+module = ["mangum.*", "aws_cdk.*", "constructs.*", "langchain_core.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------------------

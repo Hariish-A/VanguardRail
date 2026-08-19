@@ -198,3 +198,59 @@ scenarios:
         - external-email-review
         - confidential-read-audit
         - credentials-path-block
+
+  # --- Governing a proxied MCP server ---------------------------------------
+
+  - id: mcp-credential-read-blocked
+    critical: true
+    description: >-
+      The headline claim: an off-the-shelf MCP server is asked for a private key, and the
+      request is refused before the server ever sees it. The server has no knowledge of
+      Guardrail and needs none.
+    action:
+      tool: filesystem.read_file
+      arguments:
+        path: /home/agent/.ssh/id_rsa
+    expect:
+      decision: block
+      allowed: false
+      rules: [mcp-credential-read-block]
+      message_contains: id_rsa
+
+  - id: mcp-ordinary-read-allowed
+    description: >-
+      Governance must not mean obstruction. An unremarkable read through the same proxy
+      proceeds untouched, which is what makes the block above meaningful.
+    action:
+      tool: filesystem.read_file
+      arguments:
+        path: /srv/data/report.txt
+    expect:
+      decision: allow
+      allowed: true
+      rules_absent: [mcp-credential-read-block, mcp-write-requires-review]
+
+  - id: mcp-write-held-for-review
+    description: Reading is cheap to undo; writing is not.
+    action:
+      tool: filesystem.write_file
+      arguments:
+        path: /srv/data/report.txt
+        content: overwritten
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [mcp-write-requires-review]
+
+  - id: mcp-server-prefix-scopes-the-rule
+    description: >-
+      The same bare tool name on a different server must not inherit the filesystem
+      rules. Without the server prefix, one rule would silently govern every server that
+      happened to expose `read_file`.
+    action:
+      tool: notes.read_file
+      arguments:
+        path: /home/agent/.ssh/id_rsa
+    expect:
+      decision: allow
+      rules_absent: [mcp-credential-read-block]

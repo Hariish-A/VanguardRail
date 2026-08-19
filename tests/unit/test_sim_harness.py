@@ -591,3 +591,53 @@ def test_cli_writes_the_evidence_artifacts(tmp_path: Path) -> None:
     assert code == 0
     assert junit.is_file() and html.is_file()
     assert ET.fromstring(junit.read_text(encoding="utf-8")).tag == "testsuites"
+
+
+# ---------------------------------------------------------------------------
+# The policy that is tested must be the policy that ships
+# ---------------------------------------------------------------------------
+
+PACKAGED_POLICY = (
+    REPO_ROOT
+    / "packages"
+    / "guardrail-service"
+    / "src"
+    / "guardrail_service"
+    / "policies"
+    / "default.yaml"
+)
+
+
+def test_the_shipped_policy_is_the_policy_the_suite_tests() -> None:
+    """Closes a silent-divergence gap.
+
+    CI validates `policies/default.yaml` at the repo root, but the Lambda bundles
+    `packages/guardrail-service/.../policies/default.yaml`. Nothing connected the two, so
+    editing one and not the other would leave the conformance suite green while the
+    deployed policy said something different -- a green report about a file nobody runs.
+
+    Byte-for-byte rather than semantic: they are copies of one document, and a diff here
+    means somebody edited one and forgot the other.
+    """
+    assert PACKAGED_POLICY.is_file(), f"no packaged bundle at {PACKAGED_POLICY}"
+
+    root_text = POLICY_FILE.read_text(encoding="utf-8")
+    packaged_text = PACKAGED_POLICY.read_text(encoding="utf-8")
+
+    assert root_text == packaged_text, (
+        "policies/default.yaml and the bundle packaged into the Lambda have diverged. "
+        "The conformance suite tests the former and the deployed service runs the "
+        "latter, so this difference would be invisible until production behaved "
+        f"unexpectedly. Copy one over the other:\n"
+        f"  cp {POLICY_FILE} {PACKAGED_POLICY}"
+    )
+
+
+def test_the_shipped_policy_passes_the_conformance_suite(suites: list[Any]) -> None:
+    """The packaged bundle is what actually governs, so run the suite against *it*,
+    not only against the copy CI happens to point at."""
+    bundle = load_bundle_yaml(PACKAGED_POLICY.read_text(encoding="utf-8"))
+
+    report = run_suites(suites, OfflineTarget(bundle, label="packaged bundle"))
+
+    assert report.ok, [(r.scenario.id, r.failures) for r in report.results if not r.passed]
