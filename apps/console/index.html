@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guardrail — Review Console</title>
+<!--
+  Deliberately a single self-contained file with no build step and no external requests.
+
+  A React + Vite app would have meant a Node toolchain inside a Python monorepo, a build
+  artefact to deploy, and a dependency tree to keep patched -- for a review queue with
+  three screens. This runs from any static host, or straight off disk, and the whole
+  thing is auditable in one read.
+
+  The reviewer pastes their own API key, held in sessionStorage. That is the personal
+  access token pattern: the credential belongs to the person using it, is never embedded
+  in the page, and dies when the tab closes. Cognito with hosted-UI sign-in is the M5
+  upgrade; it needs a user pool, an app client, and a callback domain, which buys little
+  while there is one reviewer.
+-->
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1e222d; --line: #2a2f3d;
+    --text: #e6e9f0; --dim: #98a0b3; --accent: #5b8def;
+    --block: #ef5b5b; --hitl: #efa14b; --allow: #4bbf7b; --log: #6fb3d9;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 22px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  .spacer { flex: 1; }
+  .chip {
+    font: 12px/1 var(--mono); padding: 5px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--dim); background: var(--panel2);
+  }
+  .chip.ok { color: var(--allow); border-color: #2c5c42; }
+  .chip.bad { color: var(--block); border-color: #6b2f2f; }
+  nav { display: flex; gap: 4px; padding: 12px 22px 0; }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--dim); padding: 8px 14px; cursor: pointer; font-size: 14px;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { padding: 18px 22px 60px; max-width: 1180px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  .card.pending { border-left: 3px solid var(--hitl); }
+  .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .tool { font: 600 15px var(--mono); }
+  .muted { color: var(--dim); font-size: 13px; }
+  .badge {
+    font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .6px;
+    padding: 3px 8px; border-radius: 4px; background: var(--panel2);
+  }
+  .b-block { color: var(--block); } .b-require_hitl { color: var(--hitl); }
+  .b-allow { color: var(--allow); } .b-log_and_allow { color: var(--log); }
+  .b-approved { color: var(--allow); } .b-denied { color: var(--block); }
+  .b-expired { color: var(--dim); }
+  pre {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; overflow-x: auto; font: 12.5px/1.5 var(--mono);
+    margin: 10px 0; color: #cdd4e2;
+  }
+  .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  input[type=text], input[type=password] {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--text); padding: 9px 11px; font: 13px var(--mono); min-width: 260px;
+  }
+  input.reason { flex: 1; min-width: 220px; font-family: inherit; font-size: 14px; }
+  button.act {
+    border: 1px solid var(--line); border-radius: 6px; padding: 9px 16px;
+    cursor: pointer; font-weight: 600; font-size: 14px; background: var(--panel2);
+    color: var(--text);
+  }
+  button.approve { background: #1d4432; border-color: #2c5c42; color: #9ae7bd; }
+  button.deny { background: #4a2222; border-color: #6b2f2f; color: #f3a9a9; }
+  button.act:disabled { opacity: .5; cursor: not-allowed; }
+  .countdown { font: 12px var(--mono); color: var(--hitl); }
+  .countdown.urgent { color: var(--block); font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  td.mono { font: 12.5px var(--mono); }
+  .empty { color: var(--dim); padding: 30px; text-align: center; }
+  .err {
+    background: #3a1d1d; border: 1px solid #6b2f2f; color: #f3a9a9;
+    padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 14px;
+  }
+  label { display: block; margin: 12px 0 5px; font-size: 13px; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Guardrail <span>— review console</span></h1>
+  <div class="spacer"></div>
+  <span class="chip" id="chip-endpoint">not connected</span>
+  <span class="chip" id="chip-chain">chain: ?</span>
+  <button class="act" id="btn-settings">Settings</button>
+</header>
+
+<nav>
+  <button data-view="queue" class="active">Review queue</button>
+  <button data-view="audit">Audit log</button>
+  <button data-view="settings">Settings</button>
+</nav>
+
+<main>
+  <div id="error" class="err" style="display:none"></div>
+  <div id="view"></div>
+</main>
+
+<script>
+"use strict";
+
+const S = {
+  view: "queue",
+  baseUrl: sessionStorage.getItem("gr_base_url") || "",
+  apiKey: sessionStorage.getItem("gr_api_key") || "",
+  queue: [],
+  audit: [],
+  chain: null,
+  busy: new Set(),
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function showError(message) {
+  const box = $("error");
+  if (!message) { box.style.display = "none"; return; }
+  box.textContent = message;
+  box.style.display = "block";
+}
+
+async function api(path, options = {}) {
+  if (!S.baseUrl || !S.apiKey) throw new Error("Set the endpoint and API key in Settings.");
+  const response = await fetch(S.baseUrl.replace(/\/$/, "") + path, {
+    ...options,
+    headers: { "content-type": "application/json", "x-api-key": S.apiKey, ...(options.headers || {}) },
+  });
+  if (response.status === 401) throw new Error("Rejected: check the API key in Settings.");
+  if (!response.ok) {
+    let detail = response.statusText;
+    try { detail = (await response.json()).detail || detail; } catch { /* keep status text */ }
+    // A 409 is expected whenever two reviewers race, so it is surfaced verbatim rather
+    // than as a generic failure -- the reviewer needs to know someone else got there.
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return response.json();
+}
+
+async function refresh() {
+  if (!S.baseUrl || !S.apiKey) { render(); return; }
+  try {
+    showError("");
+    if (S.view === "queue") {
+      S.queue = (await api("/v1/decisions")).decisions;
+    } else if (S.view === "audit") {
+      S.audit = (await api("/v1/audit?limit=50")).entries;
+    }
+    S.chain = await api("/v1/audit/verify");
+  } catch (err) {
+    showError(err.message);
+  }
+  render();
+}
+
+async function resolve(decisionId, approve) {
+  const reason = ($(`reason-${decisionId}`) || {}).value || "";
+  S.busy.add(decisionId);
+  render();
+  try {
+    showError("");
+    await api(`/v1/decisions/${encodeURIComponent(decisionId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ approve, reason }),
+    });
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    S.busy.delete(decisionId);
+  }
+  await refresh();
+}
+
+function countdown(seconds) {
+  if (seconds <= 0) return `<span class="countdown urgent">expired</span>`;
+  const m = Math.floor(seconds / 60), s = seconds % 60;
+  const cls = seconds < 120 ? "countdown urgent" : "countdown";
+  return `<span class="${cls}">${m}m ${String(s).padStart(2, "0")}s left</span>`;
+}
+
+function renderQueue() {
+  if (!S.queue.length) {
+    return `<div class="empty">Nothing awaiting review.<br>
+      <span class="muted">Actions matching a <code>require_hitl</code> rule appear here.</span></div>`;
+  }
+  return S.queue.map((d) => {
+    const busy = S.busy.has(d.decision_id);
+    const rules = (d.matched_rules || []).map((r) => r.rule_id).join(", ");
+    return `<div class="card pending">
+      <div class="row">
+        <span class="tool">${esc(d.tool)}</span>
+        <span class="badge b-require_hitl">held for review</span>
+        ${countdown(d.seconds_remaining)}
+        <div class="spacer"></div>
+        <span class="muted">${esc(d.agent_id)} · ${esc(d.session_id)}</span>
+      </div>
+      ${d.message ? `<p class="muted" style="margin:8px 0 0">${esc(d.message)}</p>` : ""}
+      <div class="muted" style="margin-top:6px">policy: <b>${esc(rules || "—")}</b>
+        · on timeout: <b>${esc(d.on_timeout)}</b> · audit seq ${d.audit_seq}</div>
+      <pre>${esc(JSON.stringify(d.arguments, null, 2))}</pre>
+      <div class="actions">
+        <input class="reason" id="reason-${esc(d.decision_id)}" type="text"
+               placeholder="Reason (recorded in the audit chain)">
+        <button class="act approve" ${busy ? "disabled" : ""}
+                onclick="resolve('${esc(d.decision_id)}', true)">Approve</button>
+        <button class="act deny" ${busy ? "disabled" : ""}
+                onclick="resolve('${esc(d.decision_id)}', false)">Deny</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderAudit() {
+  if (!S.audit.length) return `<div class="empty">No audit records yet.</div>`;
+  const rows = S.audit.map((e) => `
+    <tr>
+      <td class="mono">${e.seq}</td>
+      <td><span class="badge b-${esc(e.effect)}">${esc(e.effect)}</span></td>
+      <td class="mono">${esc(e.tool)}</td>
+      <td class="mono">${esc((e.matched_rules || []).map((r) => r.rule_id).join(", ") || "—")}</td>
+      <td class="muted">${esc(e.timestamp)}</td>
+      <td class="mono" title="${esc(e.hash)}">${esc((e.hash || "").slice(0, 12))}…</td>
+    </tr>`).join("");
+  return `<div class="card"><table>
+    <thead><tr><th>seq</th><th>outcome</th><th>tool</th><th>rules</th><th>when</th><th>hash</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function renderSettings() {
+  return `<div class="card">
+    <p class="muted" style="margin-top:0">
+      Your key is kept in this tab's sessionStorage and sent as <code>x-api-key</code>.
+      It is never written to the page or to disk, and is discarded when the tab closes.
+    </p>
+    <label for="in-url">Control plane base URL</label>
+    <input id="in-url" type="text" style="width:100%" value="${esc(S.baseUrl)}"
+           placeholder="https://xxxx.lambda-url.us-east-1.on.aws">
+    <label for="in-key">Reviewer API key</label>
+    <input id="in-key" type="password" style="width:100%" value="${esc(S.apiKey)}"
+           placeholder="gr_...">
+    <div class="actions">
+      <button class="act approve" onclick="saveSettings()">Save &amp; connect</button>
+      <button class="act" onclick="clearSettings()">Forget key</button>
+    </div>
+  </div>`;
+}
+
+function saveSettings() {
+  S.baseUrl = $("in-url").value.trim();
+  S.apiKey = $("in-key").value.trim();
+  sessionStorage.setItem("gr_base_url", S.baseUrl);
+  sessionStorage.setItem("gr_api_key", S.apiKey);
+  switchView("queue");
+}
+
+function clearSettings() {
+  S.baseUrl = ""; S.apiKey = "";
+  sessionStorage.clear();
+  render();
+}
+
+function render() {
+  $("chip-endpoint").textContent = S.baseUrl
+    ? new URL(S.baseUrl).hostname.slice(0, 34)
+    : "not connected";
+
+  const chip = $("chip-chain");
+  if (S.chain) {
+    chip.textContent = S.chain.chain_valid
+      ? `chain valid · ${S.chain.records_checked} records`
+      : `CHAIN BROKEN at seq ${S.chain.broken_at_seq}`;
+    chip.className = "chip " + (S.chain.chain_valid ? "ok" : "bad");
+  }
+
+  $("view").innerHTML =
+    S.view === "queue" ? renderQueue() :
+    S.view === "audit" ? renderAudit() : renderSettings();
+
+  document.querySelectorAll("nav button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === S.view));
+}
+
+function switchView(view) { S.view = view; refresh(); }
+
+document.querySelectorAll("nav button").forEach((b) =>
+  b.addEventListener("click", () => switchView(b.dataset.view)));
+$("btn-settings").addEventListener("click", () => switchView("settings"));
+
+// Poll so an approval made elsewhere, or an expiring countdown, stays current without a
+// manual refresh. Five seconds is frequent enough to feel live and gentle on a 5 RCU table.
+setInterval(() => { if (S.view !== "settings") refresh(); }, 5000);
+
+if (!S.baseUrl || !S.apiKey) S.view = "settings";
+refresh();
+</script>
+</body>
+</html>

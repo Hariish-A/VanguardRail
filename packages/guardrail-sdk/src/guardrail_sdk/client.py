@@ -26,13 +26,14 @@ import random
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from guardrail_sdk.exceptions import GuardrailUnavailable
-from guardrail_sdk.models import Decision
+from guardrail_sdk.models import Decision, DecisionStatus
 
 DEFAULT_TIMEOUT = 5.0
 """Seconds. The engine itself answers in single-digit milliseconds, so anything near this
@@ -238,6 +239,65 @@ class GuardrailClient:
                 "configured to fail open. This decision was NOT evaluated against policy."
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Human-in-the-loop
+    # ------------------------------------------------------------------
+    def get_decision(self, decision_id: str) -> DecisionStatus:
+        """Current state of a decision held for review."""
+        response = self._http.get(f"/v1/decisions/{decision_id}")
+        if response.status_code == 404:
+            raise GuardrailUnavailable(f"no such decision {decision_id}", "decisions.get")
+        response.raise_for_status()
+        return DecisionStatus.model_validate(response.json())
+
+    def wait_for_decision(
+        self,
+        decision_id: str,
+        *,
+        timeout: float = 900.0,
+        initial_interval: float = 1.0,
+        max_interval: float = 15.0,
+        on_poll: Callable[[DecisionStatus, float], None] | None = None,
+    ) -> DecisionStatus:
+        """Block until a human resolves the decision, or the wait runs out.
+
+        The interval backs off from one second to fifteen. A human takes seconds to
+        minutes to respond, so polling every second for fifteen minutes would be roughly
+        900 pointless requests against a 5 RCU table -- while polling only every fifteen
+        seconds would make a fast approval feel sluggish. Backoff gives both.
+
+        A transient polling error does **not** end the wait: the reviewer may well be
+        approving at that moment, and abandoning the action because one poll failed would
+        turn a network blip into a refused business action. Only the deadline ends it.
+
+        On timeout the final state is fetched once more and returned. Whether that
+        permits the action is the service's call via `on_timeout`, not this client's.
+        """
+        deadline = time.monotonic() + timeout
+        interval = initial_interval
+
+        while time.monotonic() < deadline:
+            try:
+                current = self.get_decision(decision_id)
+            except (httpx.HTTPError, GuardrailUnavailable):
+                current = None
+
+            if current is not None:
+                if on_poll is not None:
+                    on_poll(current, max(0.0, deadline - time.monotonic()))
+                if current.is_settled:
+                    return current
+
+            # Sleep no longer than the time actually left, so the deadline is honoured
+            # rather than overshot by up to a full interval.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(interval, remaining))
+            interval = min(interval * 1.5, max_interval)
+
+        return self.get_decision(decision_id)
 
     # ------------------------------------------------------------------
     def health(self) -> bool:

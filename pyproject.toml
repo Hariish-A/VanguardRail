@@ -11,6 +11,9 @@ dependencies = [
 
 [tool.uv.workspace]
 members = ["packages/*", "infra", "apps/*"]
+# The review console is a single static HTML file, not a Python package -- it has no
+# build step and no dependencies by design.
+exclude = ["apps/console"]
 
 [tool.uv.sources]
 guardrail-core = { workspace = true }
@@ -57,6 +60,9 @@ ignore = ["S101"]  # assert is fine in tests
 # reads better than `except ActionBlockedError` at every call site, and they are part
 # of the SDK's public vocabulary.
 "packages/guardrail-sdk/src/guardrail_sdk/exceptions.py" = ["N818"]
+# Same reasoning: these read as conditions the caller handles by name
+# (`except DecisionAlreadyResolved`), not as generic errors.
+"packages/guardrail-service/src/guardrail_service/storage/decisions.py" = ["N818"]
 
 # ----------------------------------------------------------------------------
 # Types

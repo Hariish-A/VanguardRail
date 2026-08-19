@@ -121,13 +121,21 @@ def governed_tool(
     *,
     client: GuardrailClient | None = None,
     on_pending: str = "raise",
+    wait_timeout: float = 900.0,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Wrap a callable so policy is enforced before it runs.
 
-    `on_pending` controls what a `require_hitl` decision does. `raise` surfaces
-    ApprovalRequired so the agent can tell the user an approval is outstanding; `block`
-    treats a pause as a refusal. Pausing and refusing mean different things to the person
-    waiting, so they are kept distinguishable rather than collapsed.
+    `on_pending` decides what a `require_hitl` outcome does:
+
+    * `raise` (default) -- surface ApprovalRequired immediately, so a conversational
+      agent can tell the user an approval is outstanding and move on. Pausing and
+      refusing mean different things to the person waiting, so they stay distinguishable.
+    * `wait` -- block until a human resolves it, then execute or refuse accordingly.
+      Right for a batch job or a workflow step that has nothing useful to do meanwhile.
+    * `block` -- treat a pause as a refusal outright.
+
+    `wait_timeout` bounds the `wait` mode. When it lapses the service's `on_timeout`
+    decides the outcome, which defaults to deny -- silence is never consent.
     """
 
     def decorate(func: Callable[P, R]) -> Callable[P, R]:
@@ -163,7 +171,29 @@ def governed_tool(
             if decision.decision == "require_hitl":
                 if on_pending == "block":
                     raise ActionBlocked(decision, name)
-                raise ApprovalRequired(decision, name)
+
+                if on_pending == "wait":
+                    final = active.wait_for_decision(decision.decision_id, timeout=wait_timeout)
+                    wrapper.last_wait = final  # type: ignore[attr-defined]
+
+                    if not final.allows_execution:
+                        # Denied, or expired with on_timeout=deny. Reported as a block so
+                        # the caller handles it exactly like any other policy refusal.
+                        raise ActionBlocked(
+                            decision.model_copy(
+                                update={
+                                    "message": (
+                                        f"Human review {final.status}"
+                                        + (f" by {final.reviewer}" if final.reviewer else "")
+                                        + (f": {final.reason}" if final.reason else "")
+                                    )
+                                }
+                            ),
+                            name,
+                        )
+                    # Approved -- fall through and execute.
+                else:
+                    raise ApprovalRequired(decision, name)
 
             if ctx.dry_run:
                 # Permitted, but a dry run never touches the real world. Returning None
@@ -175,6 +205,7 @@ def governed_tool(
 
         wrapper.guardrail_tool_name = name  # type: ignore[attr-defined]
         wrapper.last_decision = None  # type: ignore[attr-defined]
+        wrapper.last_wait = None  # type: ignore[attr-defined]
         return wrapper
 
     return decorate

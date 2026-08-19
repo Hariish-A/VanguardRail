@@ -27,9 +27,14 @@ from pydantic import BaseModel, Field
 
 from guardrail_service.auth import AuthenticatedCaller, require_api_key
 from guardrail_service.config import get_settings
-from guardrail_service.dependencies import get_audit_repository, get_bundle
+from guardrail_service.dependencies import (
+    get_audit_repository,
+    get_bundle,
+    get_decision_repository,
+)
 from guardrail_service.observability import logger
 from guardrail_service.storage.audit import AuditRecord, AuditWriteError
+from guardrail_service.storage.decisions import DEFAULT_TIMEOUT_SECONDS, build_pending
 
 router = APIRouter(prefix="/v1", tags=["evaluate"])
 
@@ -131,10 +136,36 @@ async def evaluate_action(
     if effective is Effect.REQUIRE_HITL:
         rule = winning_rule(result, bundle)
         options = rule.hitl_options if rule else None
+        timeout_seconds = options.timeout_seconds if options else DEFAULT_TIMEOUT_SECONDS
+        on_timeout = options.on_timeout if options else "deny"
+
+        # The pending record is created before the response is returned, so the
+        # decision_id the agent is told to poll always exists. Handing back an id that
+        # is not yet queryable would make a fast SDK poll 404 on its first attempt.
+        get_decision_repository().create(
+            build_pending(
+                decision_id=decision_id,
+                tenant_id=envelope.tenant_id,
+                tool=envelope.tool,
+                arguments=envelope.arguments,
+                agent_id=envelope.agent_id,
+                session_id=envelope.session_id,
+                matched_rules=[
+                    {"rule_id": m.rule_id, "severity": m.severity, "effect": m.effect.wire_name}
+                    for m in result.matched_rules
+                ],
+                message=result.message,
+                audit_seq=record.seq,
+                timeout_seconds=timeout_seconds,
+                on_timeout=on_timeout,
+                reviewers=list(options.reviewers) if options else [],
+            )
+        )
+
         hitl = HitlInstructions(
             decision_id=decision_id,
-            timeout_seconds=options.timeout_seconds if options else 900,
-            on_timeout=options.on_timeout if options else "deny",
+            timeout_seconds=timeout_seconds,
+            on_timeout=on_timeout,
             poll_url=f"/v1/decisions/{decision_id}",
         )
 

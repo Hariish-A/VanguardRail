@@ -27,7 +27,7 @@ from guardrail_sdk.exceptions import (
     GuardrailError,
     GuardrailUnavailable,
 )
-from guardrail_sdk.models import Decision, HitlInfo, MatchedRule
+from guardrail_sdk.models import Decision, DecisionStatus, HitlInfo, MatchedRule
 
 __all__ = [
     "ActionBlocked",
@@ -35,6 +35,7 @@ __all__ = [
     "ApprovalRequired",
     "CircuitBreaker",
     "Decision",
+    "DecisionStatus",
     "GuardrailClient",
     "GuardrailError",
     "GuardrailUnavailable",

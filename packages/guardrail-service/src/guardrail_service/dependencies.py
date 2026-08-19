@@ -20,6 +20,11 @@ from guardrail_service.storage.audit import (
     DynamoDBAuditRepository,
     InMemoryAuditRepository,
 )
+from guardrail_service.storage.decisions import (
+    DecisionRepository,
+    DynamoDBDecisionRepository,
+    InMemoryDecisionRepository,
+)
 
 # Packaged alongside the code, so the running Lambda always has a policy even if every
 # external dependency is unreachable. M4 adds versioned bundles in DynamoDB with hot
@@ -74,7 +79,30 @@ def get_audit_repository() -> AuditRepository:
     return DynamoDBAuditRepository(settings.audit_table_name)
 
 
+@lru_cache(maxsize=1)
+def get_decision_repository() -> DecisionRepository:
+    """The human-review decision store.
+
+    Shares the audit table: a second table would need its own provisioned capacity, and
+    15 of the account's free 25 WCU are already committed. Pending decisions live under a
+    `DECISION#` sort key and reuse the outcome index as a sparse queue index.
+    """
+    settings = get_settings()
+
+    if not settings.audit_table_name:
+        if settings.stage != "local":
+            raise RuntimeError(
+                "GUARDRAIL_AUDIT_TABLE_NAME is unset in a deployed stage. Refusing to "
+                "hold human-review decisions in memory, where a cold start would "
+                "silently discard every pending approval."
+            )
+        return InMemoryDecisionRepository()
+
+    return DynamoDBDecisionRepository(settings.audit_table_name)
+
+
 def reset_caches() -> None:
     """Clear the singletons. For tests, and for policy reload in M4."""
     get_bundle.cache_clear()
     get_audit_repository.cache_clear()
+    get_decision_repository.cache_clear()

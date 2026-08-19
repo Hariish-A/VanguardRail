@@ -72,3 +72,30 @@ class Decision(BaseModel):
         rules = ", ".join(self.rule_ids)
         base = self.message or f"The action was {self.decision}."
         return f"{base}" + (f" (policy: {rules})" if rules else "")
+
+
+class DecisionStatus(BaseModel):
+    """The live state of a decision held for human review.
+
+    Returned by polling `/v1/decisions/{id}`. `allows_execution` is authoritative and
+    supplied by the service rather than derived here: an `expired` decision permits or
+    refuses according to its rule's `on_timeout`, and a client that guessed wrong in
+    either direction would be a security or availability incident.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    decision_id: str
+    status: Literal["pending", "approved", "denied", "expired"]
+    allows_execution: bool
+    tool: str = ""
+    seconds_remaining: int = 0
+    on_timeout: Literal["deny", "allow"] = "deny"
+    reviewer: str | None = None
+    reason: str | None = None
+    resolved_at: str | None = None
+
+    @property
+    def is_settled(self) -> bool:
+        """Whether waiting any longer could change the answer."""
+        return self.status != "pending"
