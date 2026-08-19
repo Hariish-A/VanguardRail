@@ -29,8 +29,8 @@ from guardrail_service.auth import AuthenticatedCaller, require_api_key
 from guardrail_service.config import get_settings
 from guardrail_service.dependencies import (
     get_audit_repository,
-    get_bundle,
     get_decision_repository,
+    get_policy_provider,
 )
 from guardrail_service.observability import logger
 from guardrail_service.storage.audit import AuditRecord, AuditWriteError
@@ -107,7 +107,10 @@ async def evaluate_action(
             )
             return EvaluateResponse.model_validate(cached)
 
-    bundle = get_bundle()
+    # The active bundle, which may have been published and activated since this
+    # container started. The provider caches it and re-checks on a timer, so a rollback
+    # reaches every warm container within `policy_refresh_seconds` and no redeploy.
+    bundle = get_policy_provider().get(envelope.tenant_id)
     result = evaluate(envelope, bundle)
     facts = build_facts(envelope)
 

@@ -7,6 +7,7 @@ dependencies = [
     "guardrail-core",
     "guardrail-service",
     "guardrail-sdk",
+    "guardrail-sim",
 ]
 
 [tool.uv.workspace]
@@ -20,6 +21,7 @@ guardrail-core = { workspace = true }
 guardrail-service = { workspace = true }
 guardrail-infra = { workspace = true }
 guardrail-sdk = { workspace = true }
+guardrail-sim = { workspace = true }
 demo-agent = { workspace = true }
 
 [dependency-groups]
@@ -61,8 +63,9 @@ ignore = ["S101"]  # assert is fine in tests
 # of the SDK's public vocabulary.
 "packages/guardrail-sdk/src/guardrail_sdk/exceptions.py" = ["N818"]
 # Same reasoning: these read as conditions the caller handles by name
-# (`except DecisionAlreadyResolved`), not as generic errors.
+# (`except DecisionAlreadyResolved`, `except PolicyNotFound`), not as generic errors.
 "packages/guardrail-service/src/guardrail_service/storage/decisions.py" = ["N818"]
+"packages/guardrail-service/src/guardrail_service/storage/policies.py" = ["N818"]
 
 # ----------------------------------------------------------------------------
 # Types

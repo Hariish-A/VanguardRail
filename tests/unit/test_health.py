@@ -74,13 +74,74 @@ def test_healthz_does_not_require_dependencies(client: TestClient) -> None:
 
 
 def test_readyz_enumerates_dependencies(client: TestClient) -> None:
+    """Readiness reports the things actually needed to serve a decision.
+
+    Previously this asserted three table-name placeholders that were all hard-coded
+    ready, so the endpoint could not return 503 under any circumstance. The names
+    changed when the check became real -- see the degradation test below, which is the
+    one that proves the probe is load-bearing.
+    """
     response = client.get("/readyz")
 
     assert response.status_code == 200
     body = response.json()
     assert body["ready"] is True
+
     names = {dep["name"] for dep in body["dependencies"]}
-    assert names == {"audit_table", "decisions_table", "policies_table"}
+    assert names == {"audit_table", "active_policy"}
+
+    policy = next(d for d in body["dependencies"] if d["name"] == "active_policy")
+    assert "active rule(s)" in policy["detail"]
+
+
+def test_readyz_reports_503_when_the_policy_store_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe must be able to fail. A readiness check that always returns 200 is
+    indistinguishable from no readiness check, and reads like coverage.
+
+    The provider deliberately keeps serving a bundle through a store outage -- an
+    agent fleet must not halt because DynamoDB blinked -- so `/readyz` is the channel
+    that makes the degradation visible rather than silent.
+    """
+    from guardrail_core.policy import load_bundle
+    from guardrail_service import dependencies
+    from guardrail_service.dependencies import reset_caches
+    from guardrail_service.policy_provider import ActivePolicyProvider
+
+    class BrokenRepository:
+        def get_active(self, tenant_id: str, bundle_id: str) -> object:
+            raise RuntimeError("DynamoDB unreachable")
+
+        def __getattr__(self, name: str) -> object:  # pragma: no cover - unused paths
+            raise AttributeError(name)
+
+    fallback = load_bundle(
+        {
+            "apiVersion": "guardrail/v1",
+            "metadata": {"bundle_id": "packaged", "version": 1},
+            "rules": [],
+        }
+    )
+    broken = ActivePolicyProvider(BrokenRepository(), fallback)  # type: ignore[arg-type]
+
+    # Cleared before patching: `reset_caches` calls `cache_clear()` on the real
+    # lru_cache-wrapped provider, which the replacement lambda does not have.
+    reset_caches()
+
+    # `health.py` imports the provider inside the request, so patching the attribute on
+    # the dependencies module is what a real cold start with a broken table would hit.
+    monkeypatch.setattr(dependencies, "get_policy_provider", lambda: broken)
+
+    response = TestClient(app).get("/readyz")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["ready"] is False
+
+    policy = next(d for d in body["dependencies"] if d["name"] == "active_policy")
+    assert policy["ready"] is False
+    assert "DEGRADED" in policy["detail"]
 
 
 def test_version_is_reported(client: TestClient) -> None:

@@ -252,3 +252,41 @@ def test_the_service_role_cannot_delete_audit_records() -> None:
     assert "dynamodb:UpdateItem" in dynamo, "resolution needs UpdateItem"
     assert "dynamodb:DeleteItem" not in dynamo, f"role can delete evidence: {dynamo}"
     assert not any(a.endswith("*") for a in dynamo), f"wildcard grant found: {dynamo}"
+
+
+def test_policy_administration_is_closed_by_default() -> None:
+    """The allowlist ships empty, so a deployment cannot accidentally let any agent key
+    rewrite the policy that governs it. An operator has to name someone deliberately."""
+    template = _synth(enable_cloudfront=False)
+
+    functions = _resources_of_type(template, "AWS::Lambda::Function")
+    env = functions[0]["Properties"]["Environment"]["Variables"]
+
+    assert env["GUARDRAIL_POLICY_ADMIN_KEY_IDS"] == ""
+    assert env["GUARDRAIL_POLICY_REFRESH_SECONDS"] == "30"
+
+
+def test_policy_versioning_added_no_capacity() -> None:
+    """Published bundles share the audit table on purpose.
+
+    The account's whole free allowance is 25 WCU / 25 RCU and 15/15 is already committed.
+    A separate policies table -- or one more index -- would have to come out of the
+    remaining 10, so this asserts the design decision rather than trusting it.
+    """
+    template = _synth(enable_cloudfront=False)
+
+    tables = _resources_of_type(template, "AWS::DynamoDB::Table")
+    assert len(tables) == 1, "policy versioning must not introduce a second table"
+
+    write = read = 0
+    for table in tables:
+        throughput = table["Properties"]["ProvisionedThroughput"]
+        write += throughput["WriteCapacityUnits"]
+        read += throughput["ReadCapacityUnits"]
+        indexes = table["Properties"].get("GlobalSecondaryIndexes", [])
+        assert len(indexes) == 2, "a third index would push a single write past the free tier"
+        for index in indexes:
+            write += index["ProvisionedThroughput"]["WriteCapacityUnits"]
+            read += index["ProvisionedThroughput"]["ReadCapacityUnits"]
+
+    assert (write, read) == (15, 15), f"capacity drifted to {write} WCU / {read} RCU of 25"

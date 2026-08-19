@@ -15,6 +15,7 @@ from guardrail_core.policy import PolicyBundle, load_bundle_yaml
 
 from guardrail_service.config import get_settings
 from guardrail_service.observability import logger
+from guardrail_service.policy_provider import ActivePolicyProvider
 from guardrail_service.storage.audit import (
     AuditRepository,
     DynamoDBAuditRepository,
@@ -25,16 +26,25 @@ from guardrail_service.storage.decisions import (
     DynamoDBDecisionRepository,
     InMemoryDecisionRepository,
 )
+from guardrail_service.storage.policies import (
+    DynamoDBPolicyRepository,
+    InMemoryPolicyRepository,
+    PolicyRepository,
+)
 
 # Packaged alongside the code, so the running Lambda always has a policy even if every
-# external dependency is unreachable. M4 adds versioned bundles in DynamoDB with hot
-# reload; this file remains the fallback.
+# external dependency is unreachable. Versioned bundles published through the policy API
+# take precedence once one is activated; this file remains the floor beneath them.
 _BUNDLED_POLICY = Path(__file__).parent / "policies" / "default.yaml"
 
 
 @lru_cache(maxsize=1)
 def get_bundle() -> PolicyBundle:
-    """Load and validate the active policy bundle.
+    """Load and validate the *packaged* policy bundle.
+
+    This is the bundle that ships inside the deployment artifact. It is the active
+    policy until something is published and activated through `/v1/policies`, and it
+    stays the last-resort fallback after that -- see `policy_provider`.
 
     A malformed bundle raises here, at cold start, rather than mid-evaluation. That is
     deliberate: the container fails to initialise and the deploy is visibly broken,
@@ -101,8 +111,46 @@ def get_decision_repository() -> DecisionRepository:
     return DynamoDBDecisionRepository(settings.audit_table_name)
 
 
+@lru_cache(maxsize=1)
+def get_policy_repository() -> PolicyRepository | None:
+    """The versioned policy store.
+
+    Returns None when no table is configured, which is the local-development case: the
+    provider then serves the packaged bundle and nothing is silently unavailable.
+    Unlike the audit repository this does not refuse to start in a deployed stage --
+    losing the ability to *publish* a policy is an inconvenience, while losing the
+    ability to *record* a decision is a correctness failure.
+    """
+    settings = get_settings()
+
+    if not settings.audit_table_name:
+        return InMemoryPolicyRepository() if settings.stage == "local" else None
+
+    return DynamoDBPolicyRepository(settings.audit_table_name)
+
+
+@lru_cache(maxsize=1)
+def get_policy_provider() -> ActivePolicyProvider:
+    """The hot-reloading source of the active bundle.
+
+    One instance per warm container, so its cache survives across invocations. That is
+    the entire point: a per-request instance would read DynamoDB on every evaluation and
+    turn a governance check into a database call.
+    """
+    settings = get_settings()
+
+    return ActivePolicyProvider(
+        get_policy_repository(),
+        get_bundle(),
+        bundle_id=settings.policy_bundle_id,
+        refresh_seconds=settings.policy_refresh_seconds,
+    )
+
+
 def reset_caches() -> None:
-    """Clear the singletons. For tests, and for policy reload in M4."""
+    """Clear the singletons. For tests, and after a deploy-time configuration change."""
     get_bundle.cache_clear()
     get_audit_repository.cache_clear()
     get_decision_repository.cache_clear()
+    get_policy_repository.cache_clear()
+    get_policy_provider.cache_clear()

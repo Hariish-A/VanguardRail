@@ -133,3 +133,69 @@ async def require_api_key(
 
 
 CallerDependency = Annotated[AuthenticatedCaller, Depends(require_api_key)]
+
+
+POLICY_ADMIN_ENV = "GUARDRAIL_POLICY_ADMIN_KEY_IDS"
+
+
+def _policy_admin_key_ids() -> frozenset[str]:
+    """Key ids permitted to publish or activate policy.
+
+    Read from the environment on every call rather than cached: this is not a hot path,
+    and being able to revoke a policy-admin key by changing one environment variable
+    without waiting for a container to recycle is worth more than the microseconds.
+    """
+    raw = os.environ.get(POLICY_ADMIN_ENV, "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+async def require_policy_admin(
+    caller: Annotated[AuthenticatedCaller, Depends(require_api_key)],
+) -> AuthenticatedCaller:
+    """Authorise a policy change.
+
+    **This is the privilege that matters most in the whole system.** An agent whose key
+    can rewrite the policy governing it is not governed at all -- it can approve its own
+    next action by publishing a bundle that permits it. So writing policy is a separate
+    permission from calling `/v1/evaluate`, and it is not granted by holding a valid key.
+
+    The allowlist defaults to **empty**, which means nobody may publish until an operator
+    names someone. Publishing then fails with a 403 that says exactly what to set. That
+    is deliberately inconvenient: the alternative default -- any authenticated caller may
+    rewrite policy -- is insecure the moment a single agent key leaks, and it would be
+    insecure silently.
+
+    Reading policy stays open to any authenticated caller in the tenant. An agent
+    knowing the rules it is bound by is not a risk; an agent editing them is.
+
+    M5 replaces this with per-key roles in DynamoDB. The dependency boundary is already
+    here, so that change touches one function.
+    """
+    allowed = _policy_admin_key_ids()
+
+    if not allowed:
+        logger.warning("policy_admin_unconfigured", extra={"key_id": caller.key_id})
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"No policy administrators are configured, so policy cannot be changed. "
+                f"Set {POLICY_ADMIN_ENV} to a comma-separated list of key ids. Refusing "
+                "by default is intentional: any key being able to rewrite policy would "
+                "make the guardrail self-defeating."
+            ),
+        )
+
+    if caller.key_id not in allowed:
+        logger.warning(
+            "policy_admin_denied",
+            extra={"key_id": caller.key_id, "tenant_id": caller.tenant_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This API key may evaluate actions but may not change policy.",
+        )
+
+    return caller
+
+
+PolicyAdminDependency = Annotated[AuthenticatedCaller, Depends(require_policy_admin)]

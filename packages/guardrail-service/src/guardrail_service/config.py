@@ -41,6 +41,20 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     """CloudFront-associated resources must live in us-east-1."""
 
+    # --- Policy lifecycle ---------------------------------------------------
+    policy_bundle_id: str = "default"
+    """Which bundle this deployment serves. One name per deployment, so activating a
+    version can never accidentally switch which policy is in force."""
+
+    policy_refresh_seconds: float = 30.0
+    """How stale the active policy may be in a warm container.
+
+    An explicit bound, not a guess. Lambda freezes containers between invocations, so
+    a background poller cannot run and the only place to re-check is the request path.
+    Thirty seconds makes an emergency rollback feel immediate while costing one small
+    eventually-consistent read per container per half minute. Set to 0 to re-check on
+    every request -- correct for a test, wasteful in production."""
+
     # --- Storage (created in M1; declared now so readiness can report honestly) ---
     audit_table_name: str | None = Field(default=None)
     decisions_table_name: str | None = Field(default=None)

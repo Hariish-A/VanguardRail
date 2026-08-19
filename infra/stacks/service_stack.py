@@ -139,6 +139,42 @@ CONSOLE_ORIGINS = [
 ]
 
 
+def _api_key_table() -> str:
+    """Read GUARDRAIL_API_KEYS_JSON, failing the synth if it is not usable JSON.
+
+    Learned the hard way. The value is a JSON object full of double quotes; sourcing an
+    unquoted `.env` line into the shell strips them, and the deploy then ships a mangled
+    table. The app fails closed on an unparseable table -- correct -- so the symptom is
+    every single request returning 401, with nothing in the deploy output suggesting why.
+
+    Checking at synth turns a confusing outage into a build error that names the problem.
+    An empty value stays legal: that is a deployment with no keys yet, which is different
+    from a deployment with broken ones.
+    """
+    import json
+
+    raw = os.environ.get("GUARDRAIL_API_KEYS_JSON", "").strip()
+    if not raw:
+        return "{}"
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"GUARDRAIL_API_KEYS_JSON is not valid JSON ({exc}). If you sourced it from "
+            ".env, single-quote the value -- the shell strips the double quotes "
+            "otherwise, and the deployed service would reject every request with 401."
+        ) from exc
+
+    if not isinstance(parsed, dict) or not all(isinstance(v, dict) for v in parsed.values()):
+        raise ValueError(
+            "GUARDRAIL_API_KEYS_JSON must be an object of "
+            '{"<sha256>": {"key_id": ..., "tenant_id": ..., "name": ...}}.'
+        )
+
+    return raw
+
+
 class ServiceStack(Stack):
     """Lambda + Function URL + CloudFront, plus the log group that caps log spend."""
 
@@ -322,7 +358,19 @@ class ServiceStack(Stack):
                 "GUARDRAIL_AUDIT_TABLE_NAME": self.audit_table.table_name,
                 # Hashes only -- a leaked value discloses no usable credential.
                 # M5 moves this to a DynamoDB table for rotation without redeploy.
-                "GUARDRAIL_API_KEYS_JSON": os.environ.get("GUARDRAIL_API_KEYS_JSON", "{}"),
+                "GUARDRAIL_API_KEYS_JSON": _api_key_table(),
+                # Which API key ids may publish or activate policy. Empty by default,
+                # which means *nobody* can -- an agent whose key could rewrite the policy
+                # governing it would not be governed. Failing closed here is deliberate:
+                # the alternative default is insecure the moment one agent key leaks.
+                "GUARDRAIL_POLICY_ADMIN_KEY_IDS": os.environ.get(
+                    "GUARDRAIL_POLICY_ADMIN_KEY_IDS", ""
+                ),
+                # How stale a warm container's copy of the active policy may be. An
+                # explicit bound rather than a guess -- see policy_provider.py.
+                "GUARDRAIL_POLICY_REFRESH_SECONDS": os.environ.get(
+                    "GUARDRAIL_POLICY_REFRESH_SECONDS", "30"
+                ),
                 "GUARDRAIL_STAGE": stage,
                 "GUARDRAIL_VERSION": version,
                 "GUARDRAIL_LOG_LEVEL": "INFO" if stage == "prod" else "DEBUG",

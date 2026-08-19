@@ -1,0 +1,200 @@
+# The design claims behind the policy model, made falsifiable.
+#
+# The suite above proves the five stated outcomes. This one covers the properties the
+# architecture actually rests on -- fail-closed UNKNOWN handling, most-restrictive
+# resolution, and the extractor normalisation that stops a rule being sidestepped by
+# rephrasing the same action. Those are the claims worth having a test tell the truth
+# about.
+
+apiVersion: guardrail/v1
+name: Policy model properties
+description: >-
+  Fail-closed behaviour on undeterminable facts, most-restrictive resolution across
+  overlapping rules, and the derived-fact normalisation that closes the obvious bypasses.
+
+defaults:
+  agent_id: sim-policy-model
+  context: {}
+
+scenarios:
+  # --- Fail closed on what cannot be measured -------------------------------
+
+  - id: unmeasurable-delete-fails-closed
+    critical: true
+    description: >-
+      A delete driven by a WHERE clause has a row count the engine cannot know. It must
+      be treated as large, not as small -- an unmeasured deletion is the dangerous case.
+    action:
+      tool: db.delete_records
+      arguments:
+        table: users
+        where: last_login < '2023-01-01'
+    expect:
+      decision: block
+      allowed: false
+      rules: [db-bulk-delete]
+      unknown_paths: [derived.record_count]
+
+  - id: unparseable-recipient-fails-closed
+    description: >-
+      A recipient the engine cannot parse must not read as "no external recipients".
+      Held for review rather than waved through.
+    action:
+      tool: email.send
+      arguments:
+        to: [not-an-address]
+        subject: hello
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [external-email-review]
+      unknown_paths: [derived.recipient_domains]
+
+  # --- Bypasses the extractors are there to close ---------------------------
+
+  - id: bcc-external-still-reviewed
+    critical: true
+    description: >-
+      Addressing an internal recipient and bcc-ing an outsider is the obvious way to
+      dodge an outbound-mail rule. The recipient extractor reads cc and bcc too.
+    action:
+      tool: email.send
+      arguments:
+        to: [bob@acme-corp.com]
+        bcc: [rival@competitor.com]
+        subject: Roadmap
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [external-email-review]
+      message_contains: competitor.com
+
+  - id: id-list-counts-as-record-count
+    description: >-
+      The same deletion expressed as a list of ids rather than a count must trip the
+      same rule. One rule, many argument shapes -- that is what derived facts buy.
+    action:
+      tool: db.delete_records
+      arguments:
+        table: sessions
+        ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+              21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+              39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+              57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+              75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+              93, 94, 95, 96, 97, 98, 99, 100, 101]
+    expect:
+      decision: block
+      rules: [db-bulk-delete]
+      message_contains: "101"
+
+  # --- Resolution order ------------------------------------------------------
+
+  - id: most-restrictive-wins
+    critical: true
+    description: >-
+      A confidential path that is also a credential store matches a log_and_allow rule
+      and a block rule at once. The strictest wins, and both are recorded -- which is
+      what makes the outcome independent of rule order in the file.
+    action:
+      tool: file.read
+      arguments:
+        path: /srv/confidential/.env
+    expect:
+      decision: block
+      allowed: false
+      rules: [confidential-read-audit, credentials-path-block]
+
+  - id: production-context-escalates
+    description: >-
+      A five-row delete is unremarkable in staging and needs a human in production. The
+      same action, a different context, a different answer.
+    action:
+      tool: db.delete_records
+      arguments:
+        table: orders
+        count: 5
+      context:
+        environment: production
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [destructive-tool-in-production]
+      rules_absent: [db-bulk-delete]
+
+  # --- Credential paths ------------------------------------------------------
+
+  - id: ssh-key-read-blocked
+    description: Secrets are never readable through a general-purpose file tool.
+    action:
+      tool: file.read
+      arguments:
+        path: /home/agent/.ssh/id_rsa
+    expect:
+      decision: block
+      allowed: false
+      rules: [credentials-path-block]
+      rules_absent: [confidential-read-audit]
+
+  - id: windows-path-normalised
+    description: >-
+      A backslash path must not sidestep a rule written with forward slashes. The path
+      extractor normalises before any rule sees it.
+    action:
+      tool: file.read
+      arguments:
+        path: C:\Users\agent\.ssh\id_rsa
+    expect:
+      decision: block
+      rules: [credentials-path-block]
+
+  # --- Numeric thresholds, including floats ----------------------------------
+
+  - id: refund-over-limit-reviewed
+    description: >-
+      A refund above the auto-approval limit needs a human. Also pins float handling:
+      an amount of 2500.75 must survive the round trip to DynamoDB, which cannot store
+      floats natively.
+    action:
+      tool: payments.refund
+      arguments:
+        order_id: ord-8814
+        amount: 2500.75
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [payments-refund-limit]
+      message_contains: "2500.75"
+
+  - id: refund-within-limit-allowed
+    description: A refund inside the limit proceeds without ceremony.
+    action:
+      tool: payments.refund
+      arguments:
+        order_id: ord-8815
+        amount: 250.5
+    expect:
+      decision: allow
+      allowed: true
+      rules_absent: [payments-refund-limit]
+
+  # --- Negative control ------------------------------------------------------
+
+  - id: unmatched-tool-allowed
+    description: >-
+      A tool no rule mentions falls through to the bundle default. Worth asserting: it
+      is what distinguishes "default-permit, layered over working agents" from a policy
+      that silently governs nothing.
+    action:
+      tool: http.request
+      arguments:
+        method: GET
+        url: https://status.acme-corp.com/health
+    expect:
+      decision: allow
+      allowed: true
+      rules_absent:
+        - db-bulk-delete
+        - external-email-review
+        - confidential-read-audit
+        - credentials-path-block

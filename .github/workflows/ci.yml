@@ -56,6 +56,29 @@ jobs:
           path: coverage.xml
           retention-days: 7
 
+      # The conformance suite runs offline against the policy bundle in the repo, so a
+      # rule regression fails the pull request rather than being discovered after a
+      # deploy. It needs no AWS, no credentials, and no network.
+      - name: Validate scenarios against the policy bundle
+        run: uv run guardrail-sim validate scenarios/ --policy policies/default.yaml
+
+      - name: Policy conformance (offline)
+        run: |
+          uv run guardrail-sim run scenarios/             --policy policies/default.yaml             --junit reports/conformance-offline.xml             --html reports/conformance-offline.html
+
+      # Proves dry-run reports what enforcement would really do. Without it, "shadow
+      # mode says the change is safe" is an unverified claim people deploy on.
+      - name: Dry-run parity
+        run: uv run guardrail-sim parity scenarios/ --policy policies/default.yaml
+
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-offline
+          path: reports/
+          retention-days: 14
+
   cost-gate:
     name: Cost gate (no paid AWS resources)
     runs-on: ubuntu-latest
@@ -121,6 +144,9 @@ jobs:
           GUARDRAIL_STAGE: dev
           GUARDRAIL_VERSION: ${{ github.sha }}
           GUARDRAIL_ALERT_EMAIL: ${{ secrets.GUARDRAIL_ALERT_EMAIL }}
+          GUARDRAIL_API_KEYS_JSON: ${{ secrets.GUARDRAIL_API_KEYS_JSON }}
+          # Empty unless the secret is set, which leaves policy administration closed.
+          GUARDRAIL_POLICY_ADMIN_KEY_IDS: ${{ secrets.GUARDRAIL_POLICY_ADMIN_KEY_IDS }}
         run: cdk deploy --all --require-approval never --outputs-file outputs.json
 
       - name: Smoke test the deployment
@@ -165,6 +191,27 @@ jobs:
           else
             [ "$STATUS" = "200" ] || { echo "FAIL: Function URL should serve directly"; exit 1; }
           fi
+
+      - name: Post-deploy conformance against the live endpoint
+        working-directory: infra
+        env:
+          GUARDRAIL_API_KEY: ${{ secrets.GUARDRAIL_CI_API_KEY }}
+        # The same scenarios that gated the pull request, now against deployed AWS --
+        # which additionally exercises auth, DynamoDB, the audit write, and whichever
+        # policy version is actually active. A green offline report says nothing about
+        # production unless this also passes.
+        run: |
+          BASE=$(python -c "import json;print(json.load(open('outputs.json'))['Guardrail-Service-dev']['BaseUrl'])")
+          cd ..
+          uv run guardrail-sim run scenarios/             --endpoint "$BASE"             --junit reports/conformance-live.xml             --html reports/conformance-live.html
+
+      - name: Upload live conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-live
+          path: reports/
+          retention-days: 30
 
       - name: Verify data endpoints reject unauthenticated callers
         working-directory: infra

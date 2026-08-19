@@ -1,0 +1,24 @@
+[project]
+name = "guardrail-sim"
+version = "0.1.0"
+description = "Scenario harness that proves a Guardrail policy behaves as intended, against a live endpoint or offline."
+requires-python = ">=3.12"
+dependencies = [
+    "guardrail-core",
+    "httpx>=0.27",
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+guardrail-sim = "guardrail_sim.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guardrail_sim"]
+
+[tool.uv.sources]
+guardrail-core = { workspace = true }

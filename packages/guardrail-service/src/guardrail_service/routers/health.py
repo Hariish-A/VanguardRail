@@ -50,24 +50,67 @@ class ReadinessResponse(BaseModel):
 def _check_dependencies(settings: Settings) -> list[DependencyStatus]:
     """Report on everything required to serve a policy decision.
 
-    M0 has no data-plane dependencies yet, so this reports the configuration state
-    honestly rather than hard-coding success. M1 extends it with real DynamoDB
-    reachability checks and an "active policy bundle is loaded" assertion.
+    This used to report every dependency as ready with a "not provisioned yet" note --
+    which meant `/readyz` could not return 503 under any circumstance. A readiness probe
+    that cannot fail is worse than no probe: it reads as a working health check right up
+    to the incident where it should have caught something.
+
+    Two real checks now. Neither performs a write, and neither is on the hot path.
     """
-    tables = {
-        "audit_table": settings.audit_table_name,
-        "decisions_table": settings.decisions_table_name,
-        "policies_table": settings.policies_table_name,
-    }
-    return [
-        DependencyStatus(
-            name=name,
-            # Not yet provisioned in M0 — absence is expected, not a failure.
-            ready=True,
-            detail=f"configured as {value!r}" if value else "not provisioned until M1",
+    checks: list[DependencyStatus] = []
+
+    # --- audit store -------------------------------------------------------
+    if settings.audit_table_name:
+        checks.append(
+            DependencyStatus(
+                name="audit_table",
+                ready=True,
+                detail=f"configured as {settings.audit_table_name!r}",
+            )
         )
-        for name, value in tables.items()
-    ]
+    else:
+        # Locally this is expected; in a deployed stage it means decisions would be
+        # returned without being recorded, which is the one thing this service must
+        # never do. `dependencies.get_audit_repository` refuses to start in that case,
+        # so this branch mostly documents the contract -- but it reports honestly.
+        checks.append(
+            DependencyStatus(
+                name="audit_table",
+                ready=settings.stage == "local",
+                detail=(
+                    "not configured; using an in-memory audit log (local development)"
+                    if settings.stage == "local"
+                    else "GUARDRAIL_AUDIT_TABLE_NAME is unset in a deployed stage"
+                ),
+            )
+        )
+
+    # --- active policy -----------------------------------------------------
+    # Answers "is a valid bundle loaded, and did it come from where we think?". The
+    # provider serves a cached answer inside its refresh window, so a store outage can
+    # take up to `policy_refresh_seconds` to appear here. The age is reported rather
+    # than hidden, so the reader can tell a confirmed answer from a recent one.
+    from guardrail_service.dependencies import get_policy_provider
+
+    state = get_policy_provider().state()
+    age = round(time.monotonic() - state.checked_at, 1)
+    detail = (
+        f"{state.source} bundle v{state.version}, "
+        f"{len(state.bundle.active_rules)} active rule(s), "
+        f"mode={state.bundle.metadata.mode}, checked {age}s ago"
+    )
+    if state.degraded:
+        detail += f" -- DEGRADED: policy store unreachable ({state.error})"
+
+    checks.append(
+        DependencyStatus(
+            name="active_policy",
+            ready=not state.degraded,
+            detail=detail,
+        )
+    )
+
+    return checks
 
 
 @router.get("/healthz", response_model=HealthResponse, summary="Liveness probe")

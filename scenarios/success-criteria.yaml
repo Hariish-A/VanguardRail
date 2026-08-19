@@ -1,0 +1,88 @@
+# The five outcomes the problem statement names, as executable scenarios.
+#
+# Every one is marked `critical`, so a summary line reading "13 of 15 passed" cannot
+# hide the fact that one of the two failures was a stated requirement.
+#
+# Each asserts the *rule id* as well as the decision. Asserting only the outcome would
+# keep passing after the rule was deleted, so long as something else happened to block
+# the same action -- which is precisely the regression this suite exists to catch.
+
+apiVersion: guardrail/v1
+name: Problem statement success criteria
+description: >-
+  The five actions PS-3.1 names, with the decision and the rule each must produce.
+  Runs identically offline against policies/default.yaml and live against deployed AWS.
+
+defaults:
+  agent_id: sim-success-criteria
+  context: {}
+
+scenarios:
+  - id: bulk-delete-blocked
+    critical: true
+    description: A delete above the blast-radius threshold is refused before it runs.
+    action:
+      tool: db.delete_records
+      arguments:
+        table: users
+        count: 500
+    expect:
+      decision: block
+      allowed: false
+      rules: [db-bulk-delete]
+      message_contains: "500"
+
+  - id: small-delete-allowed
+    critical: true
+    description: The same tool below the threshold proceeds untouched.
+    action:
+      tool: db.delete_records
+      arguments:
+        table: users
+        count: 5
+    expect:
+      decision: allow
+      allowed: true
+      rules_absent: [db-bulk-delete, destructive-tool-in-production]
+
+  - id: external-email-held-for-review
+    critical: true
+    description: Mail leaving the organisation pauses for a human.
+    action:
+      tool: email.send
+      arguments:
+        to: [alice@external.com]
+        subject: Q3 numbers
+        body: Attached.
+    expect:
+      decision: require_hitl
+      allowed: false
+      rules: [external-email-review]
+      message_contains: external.com
+
+  - id: internal-email-allowed
+    critical: true
+    description: Mail that stays inside the organisation is not held.
+    action:
+      tool: email.send
+      arguments:
+        to: [bob@acme-corp.com]
+        subject: Standup notes
+        body: See you at 10.
+    expect:
+      decision: allow
+      allowed: true
+      rules_absent: [external-email-review, mass-email]
+
+  - id: confidential-read-recorded
+    critical: true
+    description: A confidential read proceeds, but never silently.
+    action:
+      tool: file.read
+      arguments:
+        path: /srv/confidential/q3.pdf
+    expect:
+      decision: log_and_allow
+      allowed: true
+      rules: [confidential-read-audit]
+      message_contains: /srv/confidential/q3.pdf

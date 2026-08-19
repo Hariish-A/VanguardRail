@@ -14,6 +14,7 @@ members = [
     "guardrail-infra",
     "guardrail-sdk",
     "guardrail-service",
+    "guardrail-sim",
 ]
 
 [[package]]
@@ -444,6 +445,7 @@ dependencies = [
     { name = "guardrail-core" },
     { name = "guardrail-sdk" },
     { name = "guardrail-service" },
+    { name = "guardrail-sim" },
 ]
 
 [package.dev-dependencies]
@@ -468,6 +470,7 @@ requires-dist = [
     { name = "guardrail-core", editable = "packages/guardrail-core" },
     { name = "guardrail-sdk", editable = "packages/guardrail-sdk" },
     { name = "guardrail-service", editable = "packages/guardrail-service" },
+    { name = "guardrail-sim", editable = "packages/guardrail-sim" },
 ]
 
 [package.metadata.requires-dev]
@@ -565,6 +568,25 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.30" },
 ]
 provides-extras = ["serve"]
+
+[[package]]
+name = "guardrail-sim"
+version = "0.1.0"
+source = { editable = "packages/guardrail-sim" }
+dependencies = [
+    { name = "guardrail-core" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "guardrail-core", editable = "packages/guardrail-core" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
 
 [[package]]
 name = "h11"
