@@ -92,10 +92,17 @@ def _check_dependencies(settings: Settings) -> list[DependencyStatus]:
     # than hidden, so the reader can tell a confirmed answer from a recent one.
     from guardrail_service.dependencies import get_policy_provider
 
-    state = get_policy_provider().state()
+    # Readiness is unauthenticated, so there is no caller tenant to report on. The
+    # default tenant is used, and *named* in the output: without that, an operator whose
+    # published policy lives under another tenant reads "packaged bundle v1" and
+    # reasonably concludes their activation did not take. Per-tenant state is at
+    # GET /v1/policies. The store round trip is what this check is really for, and it
+    # happens either way.
+    tenant = "default"
+    state = get_policy_provider().state(tenant)
     age = round(time.monotonic() - state.checked_at, 1)
     detail = (
-        f"{state.source} bundle v{state.version}, "
+        f"tenant {tenant!r}: {state.source} bundle v{state.version}, "
         f"{len(state.bundle.active_rules)} active rule(s), "
         f"mode={state.bundle.metadata.mode}, checked {age}s ago"
     )

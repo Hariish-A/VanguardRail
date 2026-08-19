@@ -92,6 +92,10 @@ def test_readyz_enumerates_dependencies(client: TestClient) -> None:
 
     policy = next(d for d in body["dependencies"] if d["name"] == "active_policy")
     assert "active rule(s)" in policy["detail"]
+    # The probe is unauthenticated, so it reports the default tenant. Saying which one
+    # matters: an operator whose policy lives under another tenant would otherwise read
+    # "packaged bundle v1" as evidence their activation failed.
+    assert "tenant 'default'" in policy["detail"]
 
 
 def test_readyz_reports_503_when_the_policy_store_is_unreachable(
