@@ -25,7 +25,7 @@ from guardrail_core.engine import build_facts, evaluate, winning_rule
 from guardrail_core.models import ActionEnvelope, EvaluationResult, RuleMatch
 from pydantic import BaseModel, Field
 
-from guardrail_service.auth import AuthenticatedCaller, require_api_key
+from guardrail_service.auth import AuthenticatedCaller, rate_limited_caller, require_api_key
 from guardrail_service.config import get_settings
 from guardrail_service.dependencies import (
     get_audit_repository,
@@ -83,7 +83,7 @@ class EvaluateResponse(BaseModel):
 async def evaluate_action(
     envelope: ActionEnvelope,
     request: Request,
-    caller: Annotated[AuthenticatedCaller, Depends(require_api_key)],
+    caller: Annotated[AuthenticatedCaller, Depends(rate_limited_caller)],
 ) -> EvaluateResponse:
     """Decide whether a tool call may proceed."""
     started = time.perf_counter()

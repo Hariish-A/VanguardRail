@@ -348,3 +348,55 @@ def test_policy_versioning_added_no_capacity() -> None:
             read += index["ProvisionedThroughput"]["ReadCapacityUnits"]
 
     assert (write, read) == (15, 15), f"capacity drifted to {write} WCU / {read} RCU of 25"
+
+
+def test_the_alarm_budget_stays_inside_the_free_tier() -> None:
+    """CloudWatch gives 10 standard-resolution alarms free, and 3 dashboards.
+
+    Asserted for the same reason the metric budget is: adding "just one more alarm" is
+    a one-line change that looks harmless in review and is discovered on an invoice.
+    Headroom is left deliberately, so the next genuine need during an incident does not
+    have to displace something.
+    """
+    template = _synth(enable_cloudfront=False)
+
+    alarms = _resources_of_type(template, "AWS::CloudWatch::Alarm")
+    dashboards = _resources_of_type(template, "AWS::CloudWatch::Dashboard")
+
+    assert len(alarms) <= 10, f"{len(alarms)} alarms, over the free 10"
+    assert len(dashboards) <= 3, f"{len(dashboards)} dashboards, over the free 3"
+    assert alarms, "no alarms configured; the deployment would be unmonitored"
+
+
+def test_every_alarm_notifies_somewhere() -> None:
+    """An alarm with no action is a red square on a page nobody opens."""
+    template = _synth(enable_cloudfront=False)
+
+    for alarm in _resources_of_type(template, "AWS::CloudWatch::Alarm"):
+        name = alarm["Properties"].get("AlarmName")
+        assert alarm["Properties"].get("AlarmActions"), f"{name} has no alarm action"
+
+
+def test_alarms_do_not_fire_on_an_idle_service() -> None:
+    """This service is idle much of the time. An alarm that fires because nothing
+    happened is one people learn to ignore, which costs more than it was ever worth."""
+    template = _synth(enable_cloudfront=False)
+
+    for alarm in _resources_of_type(template, "AWS::CloudWatch::Alarm"):
+        name = alarm["Properties"].get("AlarmName")
+        assert alarm["Properties"].get("TreatMissingData") == "notBreaching", (
+            f"{name} would alarm on missing data"
+        )
+
+
+def test_concurrency_is_reserved_but_never_provisioned() -> None:
+    """Reserved concurrency is free and is the hard ceiling the in-process rate limiter
+    leans on. *Provisioned* concurrency is the one that bills, and must never appear."""
+    template = _synth(enable_cloudfront=False)
+
+    function = _resources_of_type(template, "AWS::Lambda::Function")[0]
+    assert function["Properties"].get("ReservedConcurrentExecutions") == 10
+
+    assert not _resources_of_type(template, "AWS::Lambda::ProvisionedConcurrencyConfig"), (
+        "provisioned concurrency costs money"
+    )

@@ -16,6 +16,7 @@ from guardrail_core.policy import PolicyBundle, load_bundle_yaml
 from guardrail_service.config import get_settings
 from guardrail_service.observability import logger
 from guardrail_service.policy_provider import ActivePolicyProvider
+from guardrail_service.ratelimit import InProcessRateLimiter
 from guardrail_service.storage.audit import (
     AuditRepository,
     DynamoDBAuditRepository,
@@ -147,6 +148,22 @@ def get_policy_provider() -> ActivePolicyProvider:
     )
 
 
+@lru_cache(maxsize=1)
+def get_rate_limiter() -> InProcessRateLimiter:
+    """One limiter per warm container, so its buckets survive across invocations.
+
+    A per-request instance would hand every caller a full bucket and limit nothing at
+    all -- which would look like a working control in every test that did not measure
+    the second request.
+    """
+    settings = get_settings()
+
+    return InProcessRateLimiter(
+        per_minute=settings.rate_limit_per_minute,
+        burst=settings.rate_limit_burst or None,
+    )
+
+
 def reset_caches() -> None:
     """Clear the singletons. For tests, and after a deploy-time configuration change."""
     get_bundle.cache_clear()
@@ -154,3 +171,4 @@ def reset_caches() -> None:
     get_decision_repository.cache_clear()
     get_policy_repository.cache_clear()
     get_policy_provider.cache_clear()
+    get_rate_limiter.cache_clear()

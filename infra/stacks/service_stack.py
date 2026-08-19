@@ -29,9 +29,13 @@ import aws_cdk as cdk
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_cloudfront as cloudfront
 from aws_cdk import aws_cloudfront_origins as origins
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
+from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as subscriptions
 from constructs import Construct
 
 # Everything the service needs at runtime. Deliberately excludes boto3, which the
@@ -120,6 +124,9 @@ PLACEHOLDER_ASSET = Path(__file__).parent.parent / "placeholder"
 # Setting GUARDRAIL_ENABLE_CLOUDFRONT=true restores the distribution once an account is
 # verified, for edge caching and a custom domain. Nothing else in the system changes:
 # BaseUrl is emitted either way, so the SDK and smoke tests never learn which is active.
+RESERVED_CONCURRENCY = int(os.environ.get("GUARDRAIL_RESERVED_CONCURRENCY", "10"))
+"""Hard cap on concurrent executions. See the comment at its use site."""
+
 ENABLE_CLOUDFRONT = os.environ.get("GUARDRAIL_ENABLE_CLOUDFRONT", "false").lower() in {
     "1",
     "true",
@@ -222,6 +229,10 @@ class ServiceStack(Stack):
             # No explicit lambda:InvokeFunctionUrl grant here on purpose:
             # FunctionUrlOrigin.with_origin_access_control() already emits one, scoped to
             # this distribution's ARN and partition-aware. Adding a second is redundant.
+
+        self.alarm_topic = self._create_alarm_topic()
+        self._create_alarms()
+        self._create_dashboard()
 
         self._create_outputs()
 
@@ -353,6 +364,17 @@ class ServiceStack(Stack):
             # 400,000 GB-second allowance.
             memory_size=512,
             timeout=Duration.seconds(10),
+            # The hard ceiling. The per-tenant rate limiter runs in-process, so its real
+            # global bound is `containers x per-container rate` -- this is what bounds the
+            # container count, and AWS enforces it rather than the application.
+            #
+            # It also protects the free tier from the other direction: 10 concurrent
+            # containers cannot outrun 5 provisioned WCU for long, so a runaway agent
+            # throttles on DynamoDB rather than quietly generating a bill.
+            #
+            # Reserved concurrency is free. *Provisioned* concurrency is the one that
+            # costs money, and is deliberately not used.
+            reserved_concurrent_executions=RESERVED_CONCURRENCY,
             log_group=log_group,
             environment={
                 "GUARDRAIL_AUDIT_TABLE_NAME": self.audit_table.table_name,
@@ -371,6 +393,10 @@ class ServiceStack(Stack):
                 "GUARDRAIL_POLICY_REFRESH_SECONDS": os.environ.get(
                     "GUARDRAIL_POLICY_REFRESH_SECONDS", "30"
                 ),
+                "GUARDRAIL_RATE_LIMIT_PER_MINUTE": os.environ.get(
+                    "GUARDRAIL_RATE_LIMIT_PER_MINUTE", "600"
+                ),
+                "GUARDRAIL_RESERVED_CONCURRENCY": str(RESERVED_CONCURRENCY),
                 "GUARDRAIL_STAGE": stage,
                 "GUARDRAIL_VERSION": version,
                 "GUARDRAIL_LOG_LEVEL": "INFO" if stage == "prod" else "DEBUG",
@@ -445,6 +471,269 @@ class ServiceStack(Stack):
             # egress inside the always-free 1 TB allowance.
             price_class=cloudfront.PriceClass.PRICE_CLASS_100,
             enable_logging=False,  # Access logs would eat into the S3 free tier.
+        )
+
+    # ------------------------------------------------------------------
+    # Observability
+    # ------------------------------------------------------------------
+    def _create_alarm_topic(self) -> sns.Topic:
+        """Where alarms go.
+
+        SNS topics are free and so are the first million publishes each month, so this
+        costs nothing. An email subscription is added only when an address is configured:
+        an alarm nobody receives is worse than no alarm, because it manufactures
+        confidence that somebody is watching.
+        """
+        topic = sns.Topic(
+            self,
+            "AlarmTopic",
+            topic_name=f"guardrail-alarms-{self.stage}",
+            display_name=f"Guardrail alarms ({self.stage})",
+        )
+
+        email = os.environ.get("GUARDRAIL_ALERT_EMAIL", "").strip()
+        if email:
+            topic.add_subscription(subscriptions.EmailSubscription(email))
+
+        return topic
+
+    def _alarm(
+        self,
+        construct_id: str,
+        *,
+        metric: cloudwatch.IMetric,
+        threshold: float,
+        evaluation_periods: int,
+        description: str,
+    ) -> cloudwatch.Alarm:
+        """One alarm, wired to the topic.
+
+        `treat_missing_data=NOT_BREACHING` throughout. This service is idle much of the
+        time, and an alarm that fires because nothing happened is an alarm people learn
+        to ignore -- which costs more than the alarm was ever worth.
+        """
+        alarm = cloudwatch.Alarm(
+            self,
+            construct_id,
+            alarm_name=f"guardrail-{self.stage}-{construct_id}",
+            alarm_description=description,
+            metric=metric,
+            threshold=threshold,
+            evaluation_periods=evaluation_periods,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        alarm.add_alarm_action(cloudwatch_actions.SnsAction(self.alarm_topic))
+        return alarm
+
+    def _create_alarms(self) -> None:
+        """Exactly the alarms that matter, and no more.
+
+        The free allowance is **10 standard-resolution alarms**, so this budget is as real
+        as the metric budget. Seven are used, leaving three for whatever an incident proves
+        is missing -- spending the tenth here would mean the next genuine need costs money.
+
+        Every alarm reads a metric that already exists: the free `AWS/Lambda` and
+        `AWS/DynamoDB` namespaces, or the custom metrics already inside the 10/10 EMF
+        budget. Alarming on a metric is free; creating one is not, and there is no
+        headroom left there.
+        """
+        namespace = "guardrail"
+
+        # 1. Any error at all in a governance control is worth attention: requests are
+        #    failing, which means fail-closed clients are blocking real work.
+        self._alarm(
+            "function-errors",
+            metric=self.function.metric_errors(period=Duration.minutes(5)),
+            threshold=0,
+            evaluation_periods=1,
+            description="The control plane returned errors. Fail-closed agents are blocked.",
+        )
+
+        # 2. Throttled invocations never reached the code, so nothing was evaluated and
+        #    nothing was audited.
+        self._alarm(
+            "function-throttles",
+            metric=self.function.metric_throttles(period=Duration.minutes(5)),
+            threshold=0,
+            evaluation_periods=1,
+            description=(
+                "Lambda throttled invocations -- reserved concurrency is saturated and "
+                "tool calls are going unevaluated."
+            ),
+        )
+
+        # 3. This sits in front of every tool call an agent makes, so slow here is slow
+        #    everywhere.
+        self._alarm(
+            "function-latency",
+            metric=self.function.metric_duration(period=Duration.minutes(5), statistic="p99"),
+            threshold=2000,
+            evaluation_periods=2,
+            description="p99 evaluation latency above 2s; the guardrail is the bottleneck.",
+        )
+
+        # 4. A throttled write is the audit chain failing, which fails the request by
+        #    design rather than letting an unrecorded action through.
+        self._alarm(
+            "audit-write-throttles",
+            metric=self.audit_table.metric(
+                "WriteThrottleEvents", period=Duration.minutes(5), statistic="Sum"
+            ),
+            threshold=0,
+            evaluation_periods=1,
+            description=(
+                "Audit writes throttled at 5 provisioned WCU. Decisions are failing "
+                "closed rather than going unrecorded."
+            ),
+        )
+
+        # 5. Reads degrade the console and the policy hot reload rather than correctness.
+        self._alarm(
+            "audit-read-throttles",
+            metric=self.audit_table.metric(
+                "ReadThrottleEvents", period=Duration.minutes(5), statistic="Sum"
+            ),
+            threshold=0,
+            evaluation_periods=1,
+            description="Audit reads throttled; the console and policy reload are degraded.",
+        )
+
+        # 6. Not necessarily a fault -- it can equally be the guardrail doing its job
+        #    against a misbehaving agent -- but always worth a human looking.
+        self._alarm(
+            "block-spike",
+            metric=cloudwatch.Metric(
+                namespace=namespace,
+                metric_name="decisions",
+                dimensions_map={"outcome": "block", "service": "guardrail"},
+                period=Duration.minutes(5),
+                statistic="Sum",
+            ),
+            threshold=50,
+            evaluation_periods=1,
+            description=(
+                "Unusual number of blocked actions: either an agent is misbehaving or a "
+                "policy change was stricter than intended."
+            ),
+        )
+
+        # 7. Held decisions expire to `deny`, so an unattended queue quietly becomes
+        #    refused work.
+        self._alarm(
+            "review-queue-backlog",
+            metric=cloudwatch.Metric(
+                namespace=namespace,
+                metric_name="decisions",
+                dimensions_map={"outcome": "require_hitl", "service": "guardrail"},
+                period=Duration.minutes(15),
+                statistic="Sum",
+            ),
+            threshold=20,
+            evaluation_periods=1,
+            description=(
+                "Actions piling up awaiting review. They expire to deny, so an unattended "
+                "queue becomes refused work."
+            ),
+        )
+
+    def _create_dashboard(self) -> None:
+        """One dashboard. The free allowance is three, and one is enough.
+
+        Ordered the way an incident is actually diagnosed: what is the guardrail deciding,
+        is it healthy, and is the storage underneath it coping.
+        """
+        namespace = "guardrail"
+
+        def decisions(outcome: str) -> cloudwatch.Metric:
+            return cloudwatch.Metric(
+                namespace=namespace,
+                metric_name="decisions",
+                dimensions_map={"outcome": outcome, "service": "guardrail"},
+                period=Duration.minutes(5),
+                statistic="Sum",
+                label=outcome,
+            )
+
+        dashboard = cloudwatch.Dashboard(
+            self,
+            "Dashboard",
+            dashboard_name=f"guardrail-{self.stage}",
+            default_interval=Duration.hours(3),
+        )
+
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="Decisions by outcome",
+                left=[decisions(o) for o in ("allow", "log_and_allow", "require_hitl", "block")],
+                width=12,
+                height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="Engine latency (p50 / p99)",
+                left=[
+                    cloudwatch.Metric(
+                        namespace=namespace,
+                        metric_name="evaluate.latency_ms",
+                        dimensions_map={"stage": self.stage, "service": "guardrail"},
+                        period=Duration.minutes(5),
+                        statistic=stat,
+                        label=stat,
+                    )
+                    for stat in ("p50", "p99")
+                ],
+                width=12,
+                height=6,
+            ),
+        )
+
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="Lambda health",
+                left=[
+                    self.function.metric_invocations(period=Duration.minutes(5)),
+                    self.function.metric_errors(period=Duration.minutes(5)),
+                    self.function.metric_throttles(period=Duration.minutes(5)),
+                ],
+                width=12,
+                height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="DynamoDB capacity against the free 15 WCU / 15 RCU",
+                left=[
+                    self.audit_table.metric_consumed_write_capacity_units(
+                        period=Duration.minutes(5)
+                    ),
+                    self.audit_table.metric_consumed_read_capacity_units(
+                        period=Duration.minutes(5)
+                    ),
+                ],
+                right=[
+                    self.audit_table.metric(
+                        "WriteThrottleEvents", period=Duration.minutes(5), statistic="Sum"
+                    )
+                ],
+                width=12,
+                height=6,
+            ),
+        )
+
+        dashboard.add_widgets(
+            cloudwatch.SingleValueWidget(
+                title="Active policy version",
+                metrics=[
+                    cloudwatch.Metric(
+                        namespace=namespace,
+                        metric_name="policy.version",
+                        dimensions_map={"stage": self.stage, "service": "guardrail"},
+                        period=Duration.hours(3),
+                        statistic="Maximum",
+                        label="active version",
+                    )
+                ],
+                width=24,
+                height=3,
+            )
         )
 
     # ------------------------------------------------------------------

@@ -22,12 +22,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Any
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Response, status
 
 from guardrail_service.observability import logger
 
@@ -133,6 +134,48 @@ async def require_api_key(
 
 
 CallerDependency = Annotated[AuthenticatedCaller, Depends(require_api_key)]
+
+
+async def rate_limited_caller(
+    caller: Annotated[AuthenticatedCaller, Depends(require_api_key)],
+    response: Response,
+) -> AuthenticatedCaller:
+    """Authenticate, then check the tenant's rate budget.
+
+    Ordering matters: the limit is charged per **tenant**, which is only known after the
+    key is verified. Rate limiting before authentication would key off something an
+    attacker controls, and would let an unauthenticated flood consume a real tenant's
+    budget.
+
+    A refusal is 429 with `Retry-After`. The SDK already treats 429 as retryable and backs
+    off with jitter, so a throttled agent slows down rather than failing -- and if it
+    exhausts its retries, a fail-closed client blocks the action, which is the correct
+    outcome for an agent that will not stop.
+    """
+    from guardrail_service.dependencies import get_rate_limiter
+
+    verdict = get_rate_limiter().check(caller.tenant_id)
+
+    if not verdict.allowed:
+        logger.warning(
+            "rate_limited",
+            extra={"tenant_id": caller.tenant_id, "key_id": caller.key_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded for this tenant.",
+            headers={"Retry-After": str(max(1, int(verdict.retry_after + 0.999)))},
+        )
+
+    # A disabled limiter reports infinite remaining, and int(inf) raises OverflowError --
+    # which turned every request into a 500 the moment rate limiting was switched off.
+    # The header is simply omitted when there is no limit to report.
+    if math.isfinite(verdict.remaining):
+        response.headers["x-ratelimit-remaining"] = str(int(verdict.remaining))
+    return caller
+
+
+RateLimitedCaller = Annotated[AuthenticatedCaller, Depends(rate_limited_caller)]
 
 
 POLICY_ADMIN_ENV = "GUARDRAIL_POLICY_ADMIN_KEY_IDS"
