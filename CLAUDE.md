@@ -98,6 +98,10 @@ Lambda-hosted agent via cloudflared tunnel (declined), Cognito console sign-in (
 
 ## Commands
 
+> A full hands-on test walkthrough — per milestone and per console page, including which
+> of the four keys to use where — is in [`docs/walkthrough.md`](docs/walkthrough.md).
+
+
 ```bash
 # Quality gate — all four must pass before any commit
 uv run ruff check . && uv run ruff format --check .

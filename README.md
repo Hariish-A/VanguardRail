@@ -52,6 +52,13 @@ but are on disk: **PROGRESS.md** is the running record (status, decisions, bugs,
 resume-from-cold runbook); **Project Documentation.md** explains the concepts, the policy
 model, and the architecture. `CLAUDE.md` holds the short form of both.
 
+## How to run and test all of it
+
+[`docs/walkthrough.md`](docs/walkthrough.md) is a hands-on guide, milestone by milestone
+and console page by console page: what to run, what you should see, and — the part that
+trips people up — **which of the four API keys to use where, and why there is more than
+one**. Everything in it was executed against the live deployment.
+
 ## Quick start
 
 ```bash
