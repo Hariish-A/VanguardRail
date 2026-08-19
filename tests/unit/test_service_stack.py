@@ -27,8 +27,12 @@ INFRA_DIR = Path(__file__).resolve().parents[2] / "infra"
 sys.path.insert(0, str(INFRA_DIR))
 
 
-def _synth(*, enable_cloudfront: bool) -> dict[str, Any]:
-    """Synthesize ServiceStack and return its CloudFormation template."""
+def _synth(*, enable_cloudfront: bool, overrides: dict[str, str] | None = None) -> dict[str, Any]:
+    """Synthesize ServiceStack and return its CloudFormation template.
+
+    `overrides` sets environment variables the stack reads, for tests that need a
+    specific value. Everything else is cleared first -- see below.
+    """
     import aws_cdk as cdk
     from aws_cdk import assertions
 
@@ -36,6 +40,17 @@ def _synth(*, enable_cloudfront: bool) -> dict[str, Any]:
     # resource shape is under test, and the placeholder asset produces identical shape.
     os.environ["GUARDRAIL_SKIP_BUNDLING"] = "1"
     os.environ["GUARDRAIL_ENABLE_CLOUDFRONT"] = "true" if enable_cloudfront else "false"
+
+    # Anything the stack reads from the environment is cleared unless a test sets it
+    # deliberately. Without this the template depends on the developer's shell: sourcing
+    # .env before running the suite put a real policy-admin allowlist into os.environ,
+    # and `test_policy_administration_is_closed_by_default` failed locally while passing
+    # in CI. A test whose result moves with ambient state cannot be trusted in either
+    # direction -- it can mask a regression as easily as invent one.
+    for name in ("GUARDRAIL_POLICY_ADMIN_KEY_IDS", "GUARDRAIL_POLICY_REFRESH_SECONDS"):
+        os.environ.pop(name, None)
+    for name, value in (overrides or {}).items():
+        os.environ[name] = value
 
     # Both flags are read at import time, so the module must be reloaded per scenario.
     import stacks.service_stack as service_stack
@@ -51,8 +66,24 @@ def _synth(*, enable_cloudfront: bool) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _restore_env() -> Iterator[None]:
+    """Leave the process environment as it was found.
+
+    `_synth` deliberately clears variables the stack reads, so anything it removed has to
+    be put back -- otherwise these tests would silently change behaviour for every test
+    that runs after them.
+    """
+    watched = (
+        "GUARDRAIL_ENABLE_CLOUDFRONT",
+        "GUARDRAIL_POLICY_ADMIN_KEY_IDS",
+        "GUARDRAIL_POLICY_REFRESH_SECONDS",
+    )
+    saved = {name: os.environ.get(name) for name in watched}
     yield
-    os.environ.pop("GUARDRAIL_ENABLE_CLOUDFRONT", None)
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
     os.environ.pop("GUARDRAIL_SKIP_BUNDLING", None)
 
 
@@ -256,7 +287,12 @@ def test_the_service_role_cannot_delete_audit_records() -> None:
 
 def test_policy_administration_is_closed_by_default() -> None:
     """The allowlist ships empty, so a deployment cannot accidentally let any agent key
-    rewrite the policy that governs it. An operator has to name someone deliberately."""
+    rewrite the policy that governs it. An operator has to name someone deliberately.
+
+    Synthesized with the variable explicitly absent rather than merely unset in this
+    shell. The first version of this test read whatever the developer's environment
+    happened to hold and failed the moment `.env` was sourced.
+    """
     template = _synth(enable_cloudfront=False)
 
     functions = _resources_of_type(template, "AWS::Lambda::Function")
@@ -264,6 +300,28 @@ def test_policy_administration_is_closed_by_default() -> None:
 
     assert env["GUARDRAIL_POLICY_ADMIN_KEY_IDS"] == ""
     assert env["GUARDRAIL_POLICY_REFRESH_SECONDS"] == "30"
+
+
+def test_a_configured_policy_admin_reaches_the_deployment() -> None:
+    """The other half of the contract.
+
+    Asserting only the empty default would pass just as well if the variable were dropped
+    on the floor entirely -- and policy administration would then be impossible to enable,
+    which is a different failure but still a failure.
+    """
+    template = _synth(
+        enable_cloudfront=False,
+        overrides={
+            "GUARDRAIL_POLICY_ADMIN_KEY_IDS": "acme-policy-admin,acme-break-glass",
+            "GUARDRAIL_POLICY_REFRESH_SECONDS": "5",
+        },
+    )
+
+    functions = _resources_of_type(template, "AWS::Lambda::Function")
+    env = functions[0]["Properties"]["Environment"]["Variables"]
+
+    assert env["GUARDRAIL_POLICY_ADMIN_KEY_IDS"] == "acme-policy-admin,acme-break-glass"
+    assert env["GUARDRAIL_POLICY_REFRESH_SECONDS"] == "5"
 
 
 def test_policy_versioning_added_no_capacity() -> None:

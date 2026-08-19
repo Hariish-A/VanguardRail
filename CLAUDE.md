@@ -68,7 +68,7 @@ Lambda-hosted agent via cloudflared tunnel (declined), Cognito console sign-in (
 # Quality gate — all four must pass before any commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy packages
-uv run pytest                      # 311 tests
+uv run pytest                      # 315 tests
 
 # Deploy. Docker Desktop MUST be running (Lambda bundling needs it).
 # .env now holds every deploy variable, so sourcing it is the whole command.
@@ -163,6 +163,12 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   deliberately breaks the thing and requires the check to notice.
 - `test_the_suite_actually_fails_when_policy_regresses` is why the conformance suite is
   worth anything: it deletes a rule and requires the suite to go red. Keep it.
+- **Tests must not read the developer's shell.** `test_service_stack.py` synthesizes the
+  CDK stack, which reads `GUARDRAIL_POLICY_ADMIN_KEY_IDS` from `os.environ` — so after
+  `. ./.env` the suite failed locally while passing in CI. `_synth` now clears every
+  variable the stack reads and takes explicit `overrides`. Run the suite **both** ways
+  after touching infra tests: `uv run pytest` and `set -a && . ./.env && set +a &&
+  uv run pytest` must agree.
 
 ---
 
