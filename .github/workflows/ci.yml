@@ -79,6 +79,27 @@ jobs:
           path: reports/
           retention-days: 14
 
+  portability:
+    name: Portability (container runs the same suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - run: uv sync --all-extras --frozen
+
+      # The Dockerfile claimed portability from M0 and had never been built and run.
+      # When it finally was, the image did not start -- guardrail-core had been installed
+      # as an editable, leaving a .pth pointing at a build-stage path. An identical green
+      # report from a plain container is what makes "not Lambda-locked" a fact.
+      - name: Build the image and run the conformance suite against it
+        run: uv run python scripts/portability_proof.py
+
   cost-gate:
     name: Cost gate (no paid AWS resources)
     runs-on: ubuntu-latest
@@ -110,7 +131,7 @@ jobs:
 
   deploy:
     name: Deploy to dev
-    needs: [quality, cost-gate]
+    needs: [quality, cost-gate, portability]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: dev

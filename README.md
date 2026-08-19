@@ -15,8 +15,7 @@ LLM output ──► parse tool_calls ──► [ GUARDRAIL ] ──► execute 
 
 ## Status
 
-**Milestones 0–4 complete, deployed, and verified against live AWS.** M5 (hardening,
-multi-tenancy, MCP proxy, load test) is next.
+**All five milestones complete, deployed, and verified against live AWS.**
 
 | | Scope | State |
 |---|---|---|
@@ -25,10 +24,13 @@ multi-tenancy, MCP proxy, load test) is next.
 | M2 | Enforcement SDK + a real Qwen3 agent | verified |
 | M3 | Human-in-the-loop workflow + review console | deployed |
 | M4 | Simulation harness, dry run, versioned policy | deployed |
-| M5 | Hardening, multi-tenancy, MCP proxy, load test | next |
+| M5 | Hardening, multi-tenancy, MCP proxy, load test | deployed |
 
-315 tests, `ruff` + `mypy --strict` clean, 16/16 policy conformance against the deployed
-endpoint, and **$0.00** actual AWS spend.
+391 tests, `ruff` + `mypy --strict` clean, **20/20** policy conformance against the
+deployed endpoint *and* against a plain container, and **$0.00** actual AWS spend.
+
+Measured, not estimated: **6.1 req/s sustained** with zero errors, and a policy engine
+at **p50 4.3 ms / p99 11 ms** — see the [load test report](reports/loadtest.md).
 
 Prove it in one command, with no AWS account and no credentials:
 
@@ -45,7 +47,7 @@ model, and the architecture. `CLAUDE.md` holds the short form of both.
 
 ```bash
 uv sync --all-extras
-uv run pytest                                    # 315 tests, no AWS needed
+uv run pytest                                    # 391 tests, no AWS needed
 uv run guardrail-sim run scenarios/ -v           # policy conformance, offline
 uv run uvicorn guardrail_service.app:app --port 8080
 
@@ -60,6 +62,20 @@ BASE=https://y5ycfqeeilb24ylgmsse2agl5i0njovv.lambda-url.us-east-1.on.aws
 curl -s $BASE/healthz
 uv run guardrail-sim run scenarios/ --endpoint $BASE --api-key "$GUARDRAIL_API_KEY"   --junit reports/conformance.xml --html reports/conformance.html
 ```
+
+## Governing a tool server that knows nothing about Guardrail
+
+`guardrail-mcp` proxies any MCP server and enforces policy on every `tools/call`, with
+**no changes to the server**:
+
+```bash
+uv run python scripts/mcp_demo.py
+```
+
+That runs the real `@modelcontextprotocol/server-filesystem`, asks it for a private key,
+and checks the request never reached it — a canary string inside the key file must be
+absent from the entire transcript. An ordinary read still succeeds, and a write is held
+for human review with the file untouched on disk.
 
 ## What it does
 
@@ -82,6 +98,9 @@ uv run guardrail-sim run scenarios/ --endpoint $BASE --api-key "$GUARDRAIL_API_K
 
 Python 3.12 · FastAPI · Mangum · AWS Lambda (arm64) · Lambda Function URL · DynamoDB
 (provisioned) · AWS CDK · Ollama Qwen3 · uv · ruff · mypy strict · pytest · hypothesis
+
+Also included: an MCP guardrail proxy, LangChain and OpenAI-compatible adapters, a
+scenario conformance harness, and a threat model — see [docs/](docs/).
 
 CloudFront was designed in and then **removed**: a new AWS account cannot create
 distributions without a support case, so the Function URL is the edge and authentication

@@ -32,7 +32,12 @@ user's choice, both still on disk.
    which no code path emits. Implementing those three as written would reach 13 and bill.
 4. **Free LLM only.** Ollama + `qwen3:latest` locally. Bedrock is banned (pay-per-token).
 5. **Every milestone ends deployed and verified against live AWS**, not just tested.
-6. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
+6. **Reserved concurrency cannot be set on this account.** The total
+   `ConcurrentExecutions` quota is **10** and AWS requires 10 to stay unreserved, so
+   the maximum reservable value is zero. The account quota is the ceiling instead.
+   A **`prod` stage also cannot coexist with `dev`**: another 15/15 would take the
+   account to 30 WCU against a free 25.
+7. **Policy administration fails closed.** `GUARDRAIL_POLICY_ADMIN_KEY_IDS` lists the key
    ids allowed to publish or activate policy and defaults to **empty = nobody**. An agent
    whose key can rewrite the policy governing it is not governed. Never make this
    permissive by default. Currently `acme-policy-admin`.
@@ -54,7 +59,11 @@ user's choice, both still on disk.
 | M2 | Enforcement SDK + Qwen3 agent | done, verified |
 | M3 | HITL workflow + review console | done, deployed |
 | M4 | Simulation harness, dry-run, policy versioning | done, verified live |
-| M5 | Hardening, multi-tenancy, MCP proxy, load test | **next** |
+| M5 | Hardening, multi-tenancy, MCP proxy, load test | done, verified live |
+
+All five milestones are deployed and verified. The one open gap against the brief:
+the rubric rewards governing agents **also hosted on AWS**, and the demo agent runs
+locally against Ollama while the control plane is on AWS.
 
 Deferred deliberately, recorded in `PROGRESS.md` so they don't resurface as phantom TODOs:
 SigV4 signing (obsolete — CloudFront was removed), Bedrock adapter (costs money),
@@ -68,7 +77,7 @@ Lambda-hosted agent via cloudflared tunnel (declined), Cognito console sign-in (
 # Quality gate — all four must pass before any commit
 uv run ruff check . && uv run ruff format --check .
 uv run mypy packages
-uv run pytest                      # 315 tests
+uv run pytest                      # 391 tests
 
 # Deploy. Docker Desktop MUST be running (Lambda bundling needs it).
 # .env now holds every deploy variable, so sourcing it is the whole command.
@@ -101,6 +110,18 @@ curl -X POST "$BASE/v1/policies" -H "x-api-key: $GUARDRAIL_POLICY_ADMIN_API_KEY"
   -H 'content-type: application/json' -d '{"bundle": {...}}'
 curl -X POST "$BASE/v1/policies/versions/2/activate" \
   -H "x-api-key: $GUARDRAIL_POLICY_ADMIN_API_KEY"
+
+# Govern an UNMODIFIED third-party MCP server (needs node/npx)
+uv run python scripts/mcp_demo.py          # end-to-end proof, incl. a leak canary
+uv run guardrail-mcp --server filesystem --endpoint "$BASE" \
+  -- npx -y @modelcontextprotocol/server-filesystem /some/dir
+
+# Prove the control plane is not Lambda-locked (needs Docker)
+uv run python scripts/portability_proof.py
+
+# Load test. Run for >=120s -- a 30s run only measures DynamoDB burst credit.
+uv run python scripts/loadtest.py --endpoint "$BASE" --api-key "$GUARDRAIL_API_KEY" \
+  --concurrency 2 --duration 120
 
 # Run the governed agent (needs `ollama serve`)
 uv run python -m demo_agent "delete all 500 inactive user accounts"
@@ -150,6 +171,15 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   good bundle rather than failing requests — read the `policy_provider.py` module
   docstring before changing that; the trade-off is deliberate and documented there.
 
+- **DynamoDB write throttling is a first-class retryable failure.** `append` handles
+  it with jittered backoff bounded by a 5s deadline *inside* the 10s Lambda timeout,
+  and botocore's own retries are capped so they cannot compound. Before this, a
+  throttle escaped as a raw `ClientError` -> unhandled 500 with no log line, and the
+  invocation was killed by the timeout. Do not widen the deadline past the timeout.
+- Rate limiting is **in-process, per container**. The real global bound is
+  `containers x per-container rate`. It is not a fair-share mechanism; do not
+  describe it as one.
+
 **Testing**
 - Tests that inspect FastAPI internals rot. The auth tripwire once walked `app.routes`,
   found nothing (FastAPI wraps included routers in a private container), and **passed
@@ -163,6 +193,16 @@ cd apps/console && python -m http.server 5173 --bind 127.0.0.1
   deliberately breaks the thing and requires the check to notice.
 - `test_the_suite_actually_fails_when_policy_regresses` is why the conformance suite is
   worth anything: it deletes a rule and requires the suite to go red. Keep it.
+- **Claims that were never executed were all false.** The Dockerfile asserted
+  portability from M0 and had never been built -- the image did not start (`uv`
+  installed guardrail-core as an editable, leaving a `.pth` pointing at a build-stage
+  path). `scripts/portability_proof.py` now runs the real conformance suite against a
+  real container, in CI. Prefer executing a claim over asserting it.
+- **Load tests shorter than ~120s lie here.** A 30s run reported 18 req/s with zero
+  errors; that is DynamoDB burst credit, not capacity. The sustainable figure is
+  ~6 req/s. See `reports/loadtest.md`.
+- The two policy files (`policies/default.yaml` and the copy bundled into the Lambda)
+  are asserted **byte-identical**. CI validates one and the Lambda ships the other.
 - **Tests must not read the developer's shell.** `test_service_stack.py` synthesizes the
   CDK stack, which reads `GUARDRAIL_POLICY_ADMIN_KEY_IDS` from `os.environ` — so after
   `. ./.env` the suite failed locally while passing in CI. `_synth` now clears every
