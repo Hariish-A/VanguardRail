@@ -32,8 +32,29 @@ INFRA_DIR = Path(__file__).resolve().parents[2] / "infra"
 sys.path.insert(0, str(INFRA_DIR))
 
 
-def _synth(*, skip_bundling: bool = True) -> dict[str, Any]:
-    """Synthesize ConsoleStack and return its CloudFormation template."""
+def _fake_build(root: Path) -> Path:
+    """Write the smallest thing the stack will accept as a built console.
+
+    The alternative -- pointing at the real `apps/console-ui/dist` -- makes the result
+    depend on whether somebody has run `npm run build` on this machine. It passed locally
+    and failed in CI, where the test job does not build the frontend. A test whose result
+    moves with ambient state cannot be trusted in either direction: it can mask a
+    regression as easily as invent one.
+    """
+    dist = root / "dist"
+    (dist / "assets").mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text("<!doctype html><title>t</title>", encoding="utf-8")
+    (dist / "assets" / "index-abc123.js").write_text("// bundle", encoding="utf-8")
+    (dist / "assets" / "index-abc123.css").write_text("/* styles */", encoding="utf-8")
+    return dist
+
+
+def _synth(*, skip_bundling: bool = True, dist: Path | None = None) -> dict[str, Any]:
+    """Synthesize ConsoleStack and return its CloudFormation template.
+
+    With `skip_bundling=False` the stack really uploads an asset, so `dist` must point at
+    a directory that looks like a build. Callers pass a `tmp_path`-backed one.
+    """
     import aws_cdk as cdk
     from aws_cdk import assertions
 
@@ -42,6 +63,9 @@ def _synth(*, skip_bundling: bool = True) -> dict[str, Any]:
     import stacks.console_stack as console_stack
 
     importlib.reload(console_stack)
+
+    if dist is not None:
+        console_stack.CONSOLE_DIST = dist
 
     app = cdk.App()
     stack = console_stack.ConsoleStack(
@@ -146,11 +170,11 @@ def test_the_origin_this_page_sends_is_published_as_an_output() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_index_html_is_never_cached_immutably() -> None:
+def test_index_html_is_never_cached_immutably(tmp_path: Path) -> None:
     """Vite fingerprints its assets; index.html is the one file it does not. Serving it
     with a year-long immutable cache would keep returning the previous build to anyone
     who has visited before -- which reads as "the deploy did not work"."""
-    template = _synth(skip_bundling=False)
+    template = _synth(skip_bundling=False, dist=_fake_build(tmp_path))
 
     deployments = _resources_of_type(template, "Custom::CDKBucketDeployment")
     assert len(deployments) == 2, "expected separate asset and index deployments"
