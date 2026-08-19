@@ -11,6 +11,8 @@ Configuration comes from the environment so the same command works locally and i
     GUARDRAIL_STAGE       dev | prod          (default: dev)
     GUARDRAIL_VERSION     git SHA             (default: local)
     GUARDRAIL_ALERT_EMAIL address for the cost alarm; the budget stack is skipped without it
+    GUARDRAIL_AGENT_TARGET_URL  control-plane URL the agent is governed by; the agent
+                               stack is skipped without it
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import os
 
 import aws_cdk as cdk
+from stacks.agent_stack import AgentStack
 from stacks.budget_stack import BudgetStack
 from stacks.service_stack import ServiceStack
 
@@ -49,6 +52,25 @@ ServiceStack(
     env=env,
     description=f"Guardrail control plane ({stage}) -- action-layer governance for AI agents.",
 )
+
+# The governed demo agent, hosted on AWS. Deployed only when a control-plane URL is
+# supplied, because an agent with nothing to be governed by is not a demonstration of
+# anything -- and a separate stack so a broken agent build can never endanger the
+# control plane.
+agent_target = os.environ.get("GUARDRAIL_AGENT_TARGET_URL", "").strip()
+if agent_target:
+    AgentStack(
+        app,
+        f"Guardrail-Agent-{stage}",
+        stage=stage,
+        version=version,
+        guardrail_base_url=agent_target,
+        env=env,
+        description=(
+            f"Guardrail demo agent ({stage}) -- an AWS-hosted agent governed by the "
+            "AWS-hosted control plane."
+        ),
+    )
 
 # Account-wide, so it is only deployed alongside the dev stage and is never torn down
 # with a service stack. Skipped when no address is configured, since a budget alarm
