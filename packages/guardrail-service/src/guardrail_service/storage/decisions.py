@@ -44,6 +44,28 @@ DEFAULT_TIMEOUT_SECONDS = 900
 # still be read and reported as expired rather than vanishing into a 404.
 RECORD_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
+QUEUE_PAGE_SIZE = 100
+"""Index entries read per page when building the review queue.
+
+Larger than a typical queue on purpose: expired-but-unresolved entries stay in the sparse
+index until the record's TTL removes it, so the pages the query walks are mostly stale.
+Reading 100 at a time keeps a normal queue to a single round trip.
+"""
+
+MAX_QUEUE_PAGES = 10
+"""How far to walk before giving up.
+
+Bounds the read cost of one page load at `QUEUE_PAGE_SIZE * MAX_QUEUE_PAGES` index
+entries. Without a ceiling, a tenant that had accumulated a week of abandoned decisions
+would turn every reviewer's page load into an unbounded scan of them -- against a table
+provisioned at 5 read units.
+
+The trade-off, stated: with more than 1,000 stale entries ahead of it, a live decision
+could still be missed. That is a far larger backlog than the 111 that caused the original
+defect, and the honest fix is reclaiming expired entries from the index rather than
+raising this number.
+"""
+
 
 class DecisionNotFound(LookupError):
     """No such decision for this tenant."""
@@ -350,22 +372,64 @@ class DynamoDBDecisionRepository:
     def list_pending(self, tenant_id: str, *, limit: int = 50) -> list[PendingDecision]:
         """The review queue, via the sparse index.
 
-        Expired-but-unresolved decisions are filtered out here rather than in the query:
-        they are no longer actionable, and showing a reviewer a request they cannot
-        answer wastes their attention.
+        Expired-but-unresolved decisions are excluded: they are no longer actionable, and
+        showing a reviewer a request they cannot answer wastes their attention.
+
+        **They must be excluded in the query, not after it.** An earlier version read one
+        page of `Limit=limit` and filtered expired items out in Python, which silently
+        emptied the queue: the index is ordered oldest-first, expired entries never leave
+        it (only resolution removes the index keys, and expiry is not a write), so once
+        more than `limit` of them accumulated the first page was entirely stale and every
+        live decision sat beyond it. Found in production with 111 index entries, 3 of them
+        live, and a review queue that had been returning nothing.
+
+        The in-memory repository below filters *then* limits, which is the correct order
+        and is why every test passed. Two implementations of one contract, agreeing on the
+        signature and disagreeing on the semantics.
+
+        `Limit` bounds items **read**, not items returned, so a filtered query still needs
+        pagination -- and pagination needs a ceiling, because the stale entries linger
+        until the record's 30-day TTL removes them and an unbounded walk would turn one
+        reviewer's page load into an unbounded scan.
         """
-        response = self.client.query(
-            TableName=self._table_name,
-            IndexName="outcome-index",
-            KeyConditionExpression="gsi1pk = :pk",
-            ExpressionAttributeValues={":pk": {"S": f"TENANT#{tenant_id}#PENDING"}},
-            ScanIndexForward=True,
-            Limit=limit,
-        )
-        decisions = [
-            PendingDecision.from_item(self._deserialize(i)) for i in response.get("Items", [])
-        ]
-        return [d for d in decisions if not d.is_expired]
+        now = int(time.time())
+        collected: list[PendingDecision] = []
+        start_key: dict[str, Any] | None = None
+
+        for _ in range(MAX_QUEUE_PAGES):
+            request: dict[str, Any] = {
+                "TableName": self._table_name,
+                "IndexName": "outcome-index",
+                "KeyConditionExpression": "gsi1pk = :pk",
+                # Excluding expired records server-side keeps them from consuming the
+                # result budget. They are still *read* -- a filter is not an index -- so
+                # the page cap above is what actually bounds the cost.
+                "FilterExpression": "decision_expires_at > :now",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": f"TENANT#{tenant_id}#PENDING"},
+                    ":now": {"N": str(now)},
+                },
+                # Oldest first: the decision that has been waiting longest is the one a
+                # reviewer should see first, and it is closest to timing out into a deny.
+                "ScanIndexForward": True,
+                "Limit": QUEUE_PAGE_SIZE,
+            }
+            if start_key is not None:
+                request["ExclusiveStartKey"] = start_key
+
+            response = self.client.query(**request)
+            collected.extend(
+                PendingDecision.from_item(self._deserialize(i)) for i in response.get("Items", [])
+            )
+
+            start_key = response.get("LastEvaluatedKey")
+            if start_key is None or len(collected) >= limit:
+                break
+
+        # Belt and braces. The filter is on the stored expiry, and this re-checks against
+        # the same clock the view will render `seconds_remaining` from, so a record cannot
+        # be listed as pending and immediately display as expired.
+        return [d for d in collected if not d.is_expired][:limit]
 
     def resolve(
         self,
