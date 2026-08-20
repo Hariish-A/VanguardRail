@@ -34,7 +34,27 @@ import {
   Toggle,
 } from "@/components/ui";
 
-/** Tasks chosen so that one run reaches three different outcomes. */
+/**
+ * Tasks chosen so that one run reaches several different outcomes.
+ *
+ * ## Two things learned by running these rather than reasoning about them
+ *
+ * **Every task must be concrete.** "Clean up inactive accounts" has no number in it, and
+ * the model quite reasonably answers in prose asking which accounts — so the run reaches
+ * no tool call at all and demonstrates nothing. A preset that only sometimes calls a tool
+ * is not a demo. Each one below names the table, the count, the address, or the path.
+ *
+ * **The agent stamps `environment: production` on every call** (see `agent.py`), which
+ * means `destructive-tool-in-production` matches *any* `db.*` action with
+ * `record_count > 0`. There is therefore no small delete that comes back `allow` through
+ * the agent — a three-row delete is held exactly like a five-hundred-row one, by a
+ * different rule.
+ *
+ * That was mislabelled here as "Small delete → allowed", copied from the Decision Theatre
+ * preset of the same name, which sends *no* context and so genuinely does allow. Same
+ * action, different context, different verdict — which is the whole point of `context`,
+ * and is now what the preset says.
+ */
 const PRESETS = [
   {
     label: "Bulk delete → blocked",
@@ -52,13 +72,20 @@ const PRESETS = [
     expect: "log_and_allow",
   },
   {
-    label: "Small delete → allowed",
-    task: "Delete the 3 test accounts I created yesterday from the users table.",
+    label: "Internal email → allowed",
+    task: "Email the Q3 revenue summary to finance@acme-corp.com.",
     expect: "allow",
   },
   {
-    label: "Mixed — all four in one run",
-    task: "Clean up inactive accounts, email the summary to auditor@external-firm.com, and read /srv/confidential/q3-forecast.pdf.",
+    label: "Small delete → still held, by a different rule",
+    task: "Delete the 3 test accounts I created yesterday from the users table.",
+    expect: "require_hitl",
+  },
+  {
+    label: "Mixed — three outcomes in one run",
+    task:
+      "Delete all 500 inactive user accounts from the users table, email the Q3 revenue " +
+      "summary to auditor@external-firm.com, and read /srv/confidential/q3-forecast.pdf.",
     expect: "mixed",
   },
 ];
@@ -205,7 +232,11 @@ function AgentIdentity() {
 
 export function AgentConsolePage() {
   const { session } = useSession();
-  const [task, setTask] = useState(PRESETS[4].task);
+  // Selected by what it *is*, not by where it sits. The index-based version silently
+  // pointed at a different preset the moment one was inserted above it.
+  const [task, setTask] = useState(
+    PRESETS.find((preset) => preset.expect === "mixed")?.task ?? PRESETS[0].task,
+  );
   const [dryRun, setDryRun] = useState(false);
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState<AgentRun | null>(null);
