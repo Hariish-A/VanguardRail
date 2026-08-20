@@ -439,7 +439,7 @@ export function DecisionTheatrePage() {
               checked={dryRun}
               onChange={setDryRun}
               label="dry_run"
-              hint="Still evaluated and recorded, flagged, and excluded from enforcement metrics."
+              hint="Still evaluated and recorded, flagged, and excluded from enforcement metrics. An action policy holds is still queued for review."
             />
 
             <div className="flex flex-wrap gap-3 pt-1">

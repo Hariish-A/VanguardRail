@@ -314,7 +314,7 @@ export function AgentConsolePage() {
             checked={dryRun}
             onChange={setDryRun}
             label="Dry run"
-            hint="Policy evaluates and records exactly as normal, but no tool executes. The audit record is tagged dry_run and excluded from enforcement metrics."
+            hint="No tool executes. Policy still evaluates, still records — tagged dry_run and excluded from enforcement metrics — and an action it holds is still queued for review."
           />
           <Button onClick={go} loading={running} disabled={!task.trim()} className="sm:self-end">
             {running ? "Agent is thinking…" : "Run the agent"}

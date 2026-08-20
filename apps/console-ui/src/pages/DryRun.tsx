@@ -4,11 +4,21 @@
  * The problem statement's bonus asks for a dry-run mode. There are three here, and they
  * are genuinely different things rather than one feature described three ways:
  *
- * | | Executes the tool | Writes an audit record | Can hold a decision |
+ * | | Executes the tool | Writes an audit record | Queues a human review |
  * |---|---|---|---|
- * | `dry_run: true` on a request | no | **yes**, tagged | no |
+ * | `dry_run: true` on a request | no | **yes**, tagged | **yes** — see below |
  * | `mode: shadow` on the bundle | yes | yes | no — block and hitl are downgraded |
  * | `POST /v1/simulate` | no | **no** | no |
+ *
+ * That third column used to claim `dry_run` created no pending decision. It was wrong,
+ * and verified wrong against the deployed service: a dry run of an action policy holds
+ * returns a full `hitl` block and the decision appears in the review queue.
+ *
+ * Arguably the behaviour is what should change rather than the table — queuing a human to
+ * approve something the caller has already promised not to execute spends a reviewer's
+ * attention on a decision that cannot matter. But `dry_run` is a field on the enforcement
+ * path, and silently altering what it does is not a documentation fix. Recorded here, and
+ * on the page, until that is decided deliberately.
  *
  * ## Why the parity run uses the enforcement path, and writes
  *
@@ -211,6 +221,12 @@ export function DryRunPage() {
             enforcement path, because simulation is a different code path by construction.
             The table is provisioned at 5 write units, so the default subset is the five
             success criteria rather than the full corpus.
+          </p>
+          <p className="mt-2.5 text-[12.5px] leading-relaxed text-ink-300">
+            It also <strong className="text-hitl">queues human reviews</strong>. A{" "}
+            <span className="font-mono">dry_run</span> request that policy holds still
+            creates a pending decision, so a parity run over held actions leaves entries in
+            the review queue.
           </p>
         </div>
 
