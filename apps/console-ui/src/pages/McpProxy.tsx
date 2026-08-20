@@ -26,12 +26,10 @@
 
 import { useState } from "react";
 import { ALL_SCENARIOS, runCorpus, verdict, type ScenarioResult } from "@/lib/conformance";
-import { cn, prettyJson } from "@/lib/format";
+import { cn } from "@/lib/format";
 import { useSession } from "@/lib/store";
 import { DecisionBadge } from "@/components/DecisionBadge";
-import { GlowCard } from "@/components/effects";
 import {
-  Badge,
   Button,
   Card,
   CodeBlock,
@@ -76,20 +74,13 @@ export function McpProxyPage() {
     <div className="space-y-7">
       <div>
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">MCP Proxy</h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          <span className="font-mono text-ink-300">guardrail-mcp</span> fronts any Model
-          Context Protocol server and evaluates every{" "}
-          <span className="font-mono">tools/call</span> before it is forwarded — with{" "}
-          <strong className="text-ink-200">no changes to that server</strong>. It is how a
-          third-party agent gets governed without anyone editing its code.
-        </p>
       </div>
 
       {/* ------------------------------------------------------------ mechanism */}
       <Card className="overflow-x-auto p-6">
         <SectionTitle
           title="Where it sits"
-          hint="The proxy spawns the upstream server as its own child process, so it is the only path to those tools."
+          hint="The proxy runs the upstream server as its own child process."
         />
         <pre className="min-w-[620px] font-mono text-[12.5px] leading-[1.85] text-ink-300">
 {`  agent / IDE / Claude Desktop
@@ -124,7 +115,6 @@ export function McpProxyPage() {
           <Card className="p-5">
             <SectionTitle
               title="The policy the proxy enforces"
-              hint="These four run live. They verify the decisions — see below for what verifies the proxy itself."
             />
             <div className="flex flex-wrap items-center gap-4">
               <Button loading={running} disabled={running} onClick={() => void run()}>
@@ -196,102 +186,25 @@ export function McpProxyPage() {
         </>
       )}
 
-      {/* ------------------------------------------------------------- canary */}
-      <GlowCard className="p-6" accent="var(--color-block)">
-        <div className="flex flex-wrap items-center gap-3">
-          <Badge tone="bad">the part a browser cannot prove</Badge>
-        </div>
-        <h3 className="mt-3 text-[18px] font-semibold leading-snug text-ink-100">
-          The leak canary: proving the request never arrived
-        </h3>
-        <p className="mt-3 max-w-3xl text-[13.5px] leading-relaxed text-ink-300">
-          A decision of <span className="font-mono">block</span> is a claim the proxy makes
-          about itself. The scenarios above verify the <em>policy</em> is right; they cannot
-          verify the proxy <em>obeyed</em> it. So{" "}
-          <span className="font-mono text-ink-200">scripts/mcp_demo.py</span> runs the real
-          `@modelcontextprotocol/server-filesystem` against a directory containing a private
-          key file with a unique canary string inside it, asks for that file through the
-          proxy, and then asserts the canary appears{" "}
-          <strong className="text-ink-100">nowhere in the entire transcript</strong>.
-        </p>
-        <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-ink-400">
-          That is the difference between "the proxy said no" and "the bytes never left the
-          disk". An ordinary read still succeeds in the same run, and a write is held for
-          review with the file verifiably untouched — so the demo also shows the proxy is
-          not simply refusing everything, which would pass a naive block test.
-        </p>
-        <CodeBlock
-          className="mt-4"
-          code={`# Needs node/npx. Runs an unmodified third-party MCP server end to end.
-uv run python scripts/mcp_demo.py
-
-# Or put the proxy in front of any MCP server yourself:
-uv run guardrail-mcp --server filesystem --endpoint "$BASE" \\
-  -- npx -y @modelcontextprotocol/server-filesystem /some/dir`}
-        />
-      </GlowCard>
-
-      {/* --------------------------------------------------------- why it matters */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="p-5">
-          <SectionTitle title="Why this is the strongest enforcement point" />
-          <p className="text-[13px] leading-relaxed text-ink-300">
-            Everywhere else in this system, enforcement depends on the agent calling the
-            SDK. An agent that simply does not is ungoverned — the first residual risk in
-            the threat model, and an honest one: a firewall does not inspect a cable that
-            bypasses it.
-          </p>
-          <p className="mt-2.5 text-[13px] leading-relaxed text-ink-400">
-            The proxy removes the choice. It runs the upstream server as its own child
-            process over stdio, so it <em>is</em> the transport. There is no path to those
-            tools that does not pass through policy, and the agent needs no knowledge that
-            any of this is happening.
-          </p>
-        </Card>
-
-        <Card className="p-5">
-          <SectionTitle title="Two bugs this cost, both worth knowing" />
-          <ul className="space-y-2.5 text-[13px] leading-relaxed text-ink-300">
-            <li>
-              · <strong className="text-ink-100">A stdio deadlock.</strong> Iterating the
-              child's stream with <span className="font-mono">for line in stream</span>{" "}
-              buffers, so the proxy waited for a block that the server would only send after
-              a reply it was waiting for. <span className="font-mono">readline()</span>{" "}
-              fixed it, plus closing the upstream stdin on EOF.
-            </li>
-            <li>
-              · <strong className="text-ink-100">WinError 193 spawning npx.</strong> On
-              Windows the executable needs resolving through PATHEXT before{" "}
-              <span className="font-mono">subprocess</span> will start it.
-            </li>
-          </ul>
-          <p className="mt-3 text-[12.5px] leading-relaxed text-ink-500">
-            Both only appear when the thing is actually run against a real server, which is
-            the argument for `mcp_demo.py` existing at all.
-          </p>
-        </Card>
-      </div>
-
+      {/* The proxy itself runs over stdio and cannot be driven from a browser. This is
+          how to run it, and the script that verifies it end to end. */}
       <Card className="p-5">
         <SectionTitle
-          title="How the rules are scoped"
-          hint="Tools are namespaced by server, so a rule written for one proxied server cannot silently govern another."
+          title="Run the proxy"
+          hint="Requires node/npx. The proxy runs locally; the control plane it consults is the deployed one."
         />
         <CodeBlock
-          code={prettyJson({
-            tool: "mcp.filesystem.read_file",
-            note: "mcp.<server>.<tool> — the server name comes from --server",
-            "rule mcp-credential-read-block": "matches only mcp.filesystem.*",
-            "scenario mcp-server-prefix-scopes-the-rule":
-              "asserts the same path through a different server does NOT match",
-          })}
+          code={`# End-to-end check against a real third-party MCP server,
+# including a canary asserting a blocked read never reached it.
+uv run python scripts/mcp_demo.py
+
+# Front any MCP server:
+uv run guardrail-mcp --server filesystem --endpoint "$GUARDRAIL_BASE_URL" \
+  -- npx -y @modelcontextprotocol/server-filesystem /some/dir`}
         />
-        <p className="mt-3 text-[12.5px] leading-relaxed text-ink-500">
-          The last of those four scenarios exists precisely to stop the rule being broader
-          than intended. A rule that accidentally governs every proxied server would look
-          like extra safety and would in fact be an untested blast radius.
-        </p>
       </Card>
+
+      {/* --------------------------------------------------------- why it matters */}
     </div>
   );
 }

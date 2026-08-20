@@ -175,10 +175,8 @@ export function PlaygroundPage() {
     <div className="space-y-7">
       <div>
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">Playground</h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Probe any policy version, or an unpublished draft, without recording anything.
-          The matrix below shows which rules fire for which actions — and, more usefully,
-          which rules fire for <em>nothing</em>.
+        <p className="mt-1.5 text-[13.5px] text-ink-400">
+          Probe any policy version or an unpublished draft. Records nothing.
         </p>
       </div>
 
@@ -258,12 +256,11 @@ export function PlaygroundPage() {
                 ? "Every rule fired at least once"
                 : `${silentRules.length} rule${silentRules.length === 1 ? "" : "s"} never fired`
             }
-            hint="Across the whole corpus. A rule that matches nothing is indistinguishable from coverage until somebody looks."
+            hint="Across the whole corpus."
           />
           {silentRules.length === 0 ? (
             <p className="text-[13px] leading-relaxed text-ink-300">
-              Each of the {knownRules.length} rules matched at least one action in the
-              corpus. That is not proof they are correct — only that none of them is inert.
+              Each of the {knownRules.length} rules matched at least one action.
             </p>
           ) : (
             <>
@@ -274,21 +271,10 @@ export function PlaygroundPage() {
                   </Badge>
                 ))}
               </div>
-              <p className="mt-3 text-[13px] leading-relaxed text-ink-300">
-                Two very different causes, and this page cannot tell them apart:
+              <p className="mt-3 text-[12.5px] leading-relaxed text-ink-400">
+                Either the corpus does not exercise it, or its predicate cannot be
+                satisfied. This page cannot tell the two apart.
               </p>
-              <ul className="mt-2 space-y-1.5 text-[12.5px] leading-relaxed text-ink-400">
-                <li>
-                  · <strong className="text-ink-200">The corpus does not exercise it.</strong>{" "}
-                  Fine, and an argument for adding a scenario — an unexercised rule is an
-                  unverified one.
-                </li>
-                <li>
-                  · <strong className="text-ink-200">Its predicate cannot be satisfied.</strong>{" "}
-                  A threshold that no argument can reach, a tool name that does not exist, a
-                  fact that is always UNKNOWN. The rule reads as protection and is not.
-                </li>
-              </ul>
             </>
           )}
         </GlowCard>
@@ -299,7 +285,7 @@ export function PlaygroundPage() {
         <Card className="p-5">
           <SectionTitle
             title="Rule matrix"
-            hint="Which rules matched each action. Every match is listed, not only the winner — an action tripping four rules is worth seeing even when one dominates."
+            hint="Which rules matched each action."
           />
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left">
@@ -359,7 +345,7 @@ export function PlaygroundPage() {
         <Card className="p-5">
           <SectionTitle
             title="Probe one action"
-            hint="Against the policy selected above. Writes nothing, holds nothing."
+            hint="Against the policy selected above. Records nothing."
           />
           <div className="space-y-4">
             <Field label="Tool">
@@ -398,7 +384,7 @@ export function PlaygroundPage() {
         <Card className="p-5">
           <SectionTitle
             title="Derived facts"
-            hint="What the rules were matched against. The most useful field when a rule did not fire and you cannot see why."
+            hint="What the rules were matched against."
           />
           {!probe ? (
             <p className="text-[13px] leading-relaxed text-ink-500">
@@ -479,21 +465,6 @@ export function PlaygroundPage() {
           )}
         </Card>
       </div>
-
-      <Card className="p-5">
-        <SectionTitle title="Why an unsatisfiable rule is rejected at load time" />
-        <p className="text-[13px] leading-relaxed text-ink-300">
-          Some of this class of bug never reaches the matrix at all: a rule naming a derived
-          fact that does not exist is refused when the bundle loads, and an invalid regex
-          fails on upload rather than mid-evaluation. The operator table is closed too — an
-          unknown operator is a load-time error, never a silently skipped predicate.
-        </p>
-        <p className="mt-2 text-[13px] leading-relaxed text-ink-400">
-          What survives that, and what the matrix is for, is the rule that is <em>valid</em>{" "}
-          and still matches nothing: a threshold nothing reaches, a tool name nobody calls,
-          a condition that is always UNKNOWN.
-        </p>
-      </Card>
     </div>
   );
 }

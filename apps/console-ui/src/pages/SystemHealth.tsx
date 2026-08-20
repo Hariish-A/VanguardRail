@@ -105,33 +105,6 @@ const BUDGETS = [
   },
 ];
 
-const FACTS = [
-  {
-    title: "Fail closed, always",
-    body: "If the guardrail is unreachable the SDK blocks rather than proceeds. That trades availability for safety on purpose: an attacker who can saturate the guardrail can stop governed agents from acting, and that is the correct failure for a control whose job is to prevent unrecorded actions.",
-  },
-  {
-    title: "Rate limiting is per container",
-    body: "The token bucket is in-process, so the real global bound is containers × per-container rate — not a fair-share mechanism, and not described as one. It costs zero DynamoDB capacity, which is why it is in-process.",
-  },
-  {
-    title: "Throttled writes are retried, not dropped",
-    body: "A DynamoDB write throttle is a first-class retryable failure: jittered backoff bounded by a 5-second deadline inside the 10-second Lambda timeout, with botocore's own retries capped so they cannot compound. Before that, a throttle escaped as an unhandled 500 with no log line.",
-  },
-  {
-    title: "A policy-store outage is not an agent outage",
-    body: "Hot reload re-checks the active pointer on the request path every 30 seconds. If the store is unreachable, the last known good bundle keeps serving rather than requests failing — and /readyz reports the degradation instead of hiding it.",
-  },
-  {
-    title: "Sustained throughput is ~6 req/s, not 18",
-    body: "A 30-second load test reported 18 req/s with zero errors. That was DynamoDB burst credit, not capacity. Runs shorter than about 120 seconds lie here, and the committed report states the sustainable figure.",
-  },
-  {
-    title: "The same image runs off Lambda",
-    body: "The FastAPI app is byte-identical in the zip and the container; only the entrypoint differs. The conformance suite is run against a real container in CI, so portability is executed rather than asserted — it was asserted for four milestones while the image did not actually start.",
-  },
-];
-
 export function SystemHealthPage() {
   const { session, status } = useSession();
   const connected = status === "connected";
@@ -169,10 +142,6 @@ export function SystemHealthPage() {
           <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
             System Health
           </h1>
-          <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-            What is running, whether it can actually serve a decision, and the ceilings it
-            is designed to live inside.
-          </p>
         </div>
         <Button
           size="sm"
@@ -192,7 +161,6 @@ export function SystemHealthPage() {
           <ShimmerBorder />
           <SectionTitle
             title="Liveness — /healthz"
-            hint="Performs no I/O by design. A liveness probe that touches a database gets healthy processes restarted during an outage."
           />
           {health.loading ? (
             <Skeleton className="h-16 w-full" />
@@ -232,7 +200,7 @@ export function SystemHealthPage() {
         >
           <SectionTitle
             title="Readiness — /readyz"
-            hint="Enumerates dependencies rather than collapsing to a boolean, and returns 503 when one is down."
+            hint="503 when a dependency is unusable."
           />
           {ready.loading ? (
             <Skeleton className="h-16 w-full" />
@@ -291,7 +259,6 @@ export function SystemHealthPage() {
       <section>
         <SectionTitle
           title="Policy in force"
-          hint="Hot-reloaded on the request path, so activating a version changes live behaviour without a redeploy."
         />
         {policies.loading ? (
           <Skeleton className="h-24 w-full" />
@@ -328,7 +295,7 @@ export function SystemHealthPage() {
       <section>
         <SectionTitle
           title="Free-tier budgets, and what they cost in features"
-          hint="These ceilings are design inputs. Two of the four are exactly full, which is why certain things in this system are logs rather than metrics."
+          hint="Always-free tier allowances currently in use."
         />
         <div className="grid gap-3 sm:grid-cols-2">
           {BUDGETS.map((budget) => (
@@ -341,29 +308,6 @@ export function SystemHealthPage() {
           on-demand DynamoDB table. Cost discipline is enforced by the pipeline rather than
           by memory.
         </p>
-      </section>
-
-      <section>
-        <SectionTitle
-          title="Behaviour under stress, stated plainly"
-          hint="The parts most systems leave to a footnote."
-        />
-        <div className="grid gap-3 lg:grid-cols-2">
-          {FACTS.map((fact, index) => (
-            <motion.div
-              key={fact.title}
-              initial={{ opacity: 0, y: 10 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: "-50px" }}
-              transition={{ delay: index * 0.05, duration: 0.35 }}
-            >
-              <Card className="h-full p-5">
-                <h3 className="text-[13.5px] font-semibold text-ink-100">{fact.title}</h3>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-400">{fact.body}</p>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
       </section>
 
       <Card className="p-5">

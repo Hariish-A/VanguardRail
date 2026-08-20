@@ -32,12 +32,10 @@ import { GlowCard, ShimmerBorder } from "@/components/effects";
 import {
   Badge,
   Button,
-  Card,
   CodeBlock,
   EmptyState,
   ErrorNote,
   KeyValue,
-  SectionTitle,
   Select,
   Skeleton,
 } from "@/components/ui";
@@ -283,12 +281,6 @@ export function AuditChainPage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Audit & Chain
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Every decision is recorded — allows included, not only refusals. The record
-          holds the arguments evaluated, the facts derived from them, the rules matched,
-          the exact policy version in force, and the latency. A decision can therefore be
-          reproduced later rather than re-litigated.
-        </p>
       </div>
 
       <ChainVerdict />
@@ -357,41 +349,6 @@ export function AuditChainPage() {
           ))}
         </div>
       )}
-
-      <Card className="p-5">
-        <SectionTitle title="What this chain does and does not prove" />
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div>
-            <div className="mb-2 font-mono text-[12px] uppercase tracking-wider text-allow">
-              detected
-            </div>
-            <ul className="space-y-1.5 text-[13px] leading-relaxed text-ink-300">
-              <li>· Editing one record — the recomputed hash no longer matches</li>
-              <li>· Deleting a record from the middle — a sequence gap</li>
-              <li>· Reordering records — a broken prev_hash link</li>
-            </ul>
-          </div>
-          <div>
-            <div className="mb-2 font-mono text-[12px] uppercase tracking-wider text-block">
-              not detected
-            </div>
-            <ul className="space-y-1.5 text-[13px] leading-relaxed text-ink-300">
-              <li>
-                · A consistent rewrite of the whole chain by someone with table-wide write
-                access. Catching that needs an anchor outside their control — publishing
-                the head hash to another account or a third party.{" "}
-                <span className="text-ink-500">Not implemented, and named as gap 1.</span>
-              </li>
-              <li>
-                · Deletion of the entire table. Point-in-time recovery is enabled, and the
-                service's own IAM role has no{" "}
-                <span className="font-mono">DeleteItem</span> — it cannot erase its own
-                evidence.
-              </li>
-            </ul>
-          </div>
-        </div>
-      </Card>
     </div>
   );
 }

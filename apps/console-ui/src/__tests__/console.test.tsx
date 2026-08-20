@@ -157,27 +157,52 @@ describe("formatters", () => {
 // The landing page is readable without a credential
 // ---------------------------------------------------------------------------
 
-describe("overview", () => {
-  it("renders without a key, because it is what a first-time reader lands on", async () => {
+describe("overview dashboard", () => {
+  it("asks for a connection rather than rendering an empty dashboard", async () => {
+    // Every tile reads live. Rendering them as zeroes without a key would look exactly
+    // like a quiet system, which is the one thing this console must never imply.
     stubApi();
 
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: /Guardrails for what an agent/i }),
+      await screen.findByText(/read live from the control plane/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/not connected/i)).toBeInTheDocument();
   });
 
-  it("names the self-approval defect rather than only its fix", async () => {
-    // Recording the defect is the point. A page that showed only the role model would be
-    // describing a design, not a finding.
-    stubApi();
+  it("surfaces a broken chain as a banner, not as one tile among four", async () => {
+    // The load-bearing property of the dashboard. A `BROKEN` tile sitting beside three
+    // green ones gets scanned past; a banner above them does not.
+    stubApi({
+      "/v1/me": identity("reviewer", ["read_audit", "resolve_decisions"]),
+      "/v1/audit/verify": {
+        chain_valid: false,
+        records_checked: 812,
+        tenant_id: "acme",
+        broken_at_seq: 417,
+        reason: "content mismatch at seq 417",
+      },
+    });
+    connectAs("reviewer", ["read_audit"]);
+    window.location.hash = "#/";
 
     render(<App />);
 
+    expect(await screen.findByText(/Audit chain broken/i)).toBeInTheDocument();
+    expect(screen.getByText(/content mismatch at seq 417/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /investigate/i })).toBeInTheDocument();
+  });
+
+  it("shows the pending-review count, and links to the queue when it is not zero", async () => {
+    stubApi({ "/v1/me": identity("reviewer", ["read_decisions", "resolve_decisions"]) });
+    connectAs("reviewer", ["resolve_decisions"]);
+    window.location.hash = "#/";
+
+    render(<App />);
+
+    expect(await screen.findByText(/awaiting review/i)).toBeInTheDocument();
     expect(
-      await screen.findByText(/could approve the action its own policy had held/i),
+      await screen.findByRole("button", { name: /open the queue/i }),
     ).toBeInTheDocument();
   });
 });
@@ -301,7 +326,10 @@ describe("review queue permissions", () => {
     expect(screen.getByText(/external-email-review/)).toBeInTheDocument();
   });
 
-  it("states that a timeout denies, so silence is not consent", async () => {
+  it("shows what happens if nobody answers in time", async () => {
+    // The countdown is meaningless without its direction: a decision that expires to
+    // `deny` and one that expires to `allow` look identical otherwise, and they are
+    // opposites. Asserts the rendered control rather than any wording around it.
     stubApi({ "/v1/me": identity("reviewer", ["resolve_decisions"]) });
     connectAs("reviewer", ["resolve_decisions"]);
     window.location.hash = "#/review";
@@ -309,8 +337,7 @@ describe("review queue permissions", () => {
     render(<App />);
     await screen.findByText("email.send");
 
-    expect(screen.getAllByText(/deny/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Silence\s+must not become consent/i)).toBeInTheDocument();
+    expect(screen.getByText(`\u2192 ${HELD_DECISION.on_timeout}`)).toBeInTheDocument();
   });
 
   it("surfaces a 403 from the server rather than failing silently", async () => {
@@ -373,20 +400,6 @@ describe("audit page", () => {
     expect(screen.getByText(/content mismatch at seq 17/)).toBeInTheDocument();
   });
 
-  it("states the limit of the chain rather than only its strength", async () => {
-    // Tamper-evident, not tamper-proof. A page that claimed otherwise would be the kind
-    // of overstatement this whole project argues against.
-    stubApi({ "/v1/me": identity("agent", ["read_audit"]) });
-    connectAs("agent", ["read_audit"]);
-    window.location.hash = "#/audit";
-
-    render(<App />);
-
-    expect(await screen.findByText(/not detected/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/consistent rewrite of the whole chain/i),
-    ).toBeInTheDocument();
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -496,28 +509,19 @@ describe("policy studio permissions", () => {
 });
 
 describe("evidence pages", () => {
-  it("conformance names the canonical runner rather than implying it is the gate", async () => {
-    stubApi({ "/v1/me": identity("agent", ["simulate"]) });
-    connectAs("agent", ["simulate"]);
-    window.location.hash = "#/conformance";
-
-    render(<App />);
-
-    expect(await screen.findByText(/This page is not the gate/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/guardrail-sim/).length).toBeGreaterThan(0);
-  });
-
-  it("the MCP page separates what it proves from what it cannot", async () => {
-    // The live scenarios verify the policy. Only the canary in scripts/mcp_demo.py
-    // verifies the proxy obeyed it, and a green tick must not imply both.
+  it("tells you how to actually run the proxy", async () => {
+    // The proxy is a stdio process and cannot be driven from a browser, so the page's
+    // real job is handing over the command. Asserts the command is present rather than
+    // any prose about it.
     stubApi({ "/v1/me": identity("agent", ["simulate"]) });
     connectAs("agent", ["simulate"]);
     window.location.hash = "#/mcp";
 
     render(<App />);
 
-    expect(await screen.findByText(/leak canary/i)).toBeInTheDocument();
-    expect(screen.getByText(/the part a browser cannot prove/i)).toBeInTheDocument();
+    expect(await screen.findByText(/scripts\/mcp_demo\.py/)).toBeInTheDocument();
+    // Appears in the diagram too, so assert the flag that only the command carries.
+    expect(screen.getByText(/guardrail-mcp --server/)).toBeInTheDocument();
   });
 
   it("dry-run states that a parity run writes to the audit chain", async () => {

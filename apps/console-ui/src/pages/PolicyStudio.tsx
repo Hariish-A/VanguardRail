@@ -222,11 +222,9 @@ export function PolicyStudioPage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Policy Studio
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Every version is immutable and attributed. Publishing stores one; activating puts
-          it in force — separately, and on purpose. Activation changes live behaviour within
-          the refresh interval with <strong className="text-ink-200">no redeploy</strong>,
-          and rolling back is activating a lower number.
+        <p className="mt-1.5 text-[13.5px] text-ink-400">
+          Publishing stores an immutable version. Activating puts it in force.
+          Rolling back is activating a lower version.
         </p>
       </div>
 
@@ -338,13 +336,13 @@ export function PolicyStudioPage() {
           <Card className="p-5">
             <SectionTitle
               title="Publish"
-              hint="Stores an immutable, attributed version. It governs nobody until it is activated — which is a separate, deliberate act."
+              hint="Stores an immutable version. It governs nobody until activated."
             />
             {mayWrite ? (
               <>
                 <Field
                   label="Why this version exists"
-                  hint="Stored with it, so the history explains itself rather than being a list of hashes."
+                  hint="Stored with the version and shown in the history."
                 >
                   <Input
                     value={description}
@@ -424,7 +422,6 @@ export function PolicyStudioPage() {
           <Card className="p-5">
             <SectionTitle
               title="Version history"
-              hint="Append-only by IAM permission — the service role has no DeleteItem."
               action={
                 <Button size="sm" variant="ghost" onClick={versions.reload}>
                   Refresh

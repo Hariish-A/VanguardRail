@@ -52,33 +52,6 @@ interface ParityRow {
   error: string | null;
 }
 
-const LEVELS = [
-  {
-    name: "dry_run on one request",
-    where: "A field on the action envelope",
-    executes: "No — the caller promises not to dispatch",
-    records: "Yes, flagged dry_run and excluded from enforcement metrics",
-    holds: "No pending decision is created",
-    use: "One agent, one call, proving what would happen without doing it.",
-  },
-  {
-    name: "mode: shadow on the bundle",
-    where: "metadata.mode in the policy",
-    executes: "Yes — the agent is never restrained",
-    records: "Yes, with the decision the policy would have reached",
-    holds: "No — block and require_hitl are downgraded to log_and_allow",
-    use: "Trialling a whole policy against live traffic before it restrains anyone.",
-  },
-  {
-    name: "POST /v1/simulate",
-    where: "A separate endpoint",
-    executes: "No",
-    records: "No — nothing at all",
-    holds: "No",
-    use: "Exploring policy freely, without diluting the evidence.",
-  },
-];
-
 export function DryRunPage() {
   const { session, status } = useSession();
   const connected = status === "connected";
@@ -175,11 +148,9 @@ export function DryRunPage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Dry-run & Shadow
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Three ways to find out what policy would do without letting it do it — and they
-          differ in ways that matter. The one thing they must all satisfy is that the
-          reported decision is the decision enforcement would have reached. Otherwise
-          "shadow mode says the change is safe" is an unverified claim people deploy on.
+        <p className="mt-1.5 text-[13.5px] text-ink-400">
+          Evaluate without enforcing, and verify that dry-run agrees with
+          enforcement.
         </p>
       </div>
 
@@ -224,54 +195,12 @@ export function DryRunPage() {
       </GlowCard>
 
       {/* ------------------------------------------------------------ the three */}
-      <section>
-        <SectionTitle
-          title="Three levels, and how they differ"
-          hint="The differences are not cosmetic — pick the wrong one and you either dilute the audit chain or fail to test the thing you meant to."
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left">
-            <thead>
-              <tr className="border-b border-ink-800">
-                {["Level", "Executes?", "Recorded?", "Can hold?", "Use it for"].map((h) => (
-                  <th
-                    key={h}
-                    className="pb-2 pr-4 text-[11px] uppercase tracking-wider text-ink-500"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {LEVELS.map((level) => (
-                <tr key={level.name} className="border-b border-ink-800/60 last:border-0">
-                  <td className="py-3 pr-4 align-top">
-                    <div className="font-mono text-[12.5px] text-ink-100">{level.name}</div>
-                    <div className="mt-0.5 text-[11.5px] text-ink-500">{level.where}</div>
-                  </td>
-                  <td className="py-3 pr-4 align-top text-[12.5px] text-ink-300">
-                    {level.executes}
-                  </td>
-                  <td className="py-3 pr-4 align-top text-[12.5px] text-ink-300">
-                    {level.records}
-                  </td>
-                  <td className="py-3 pr-4 align-top text-[12.5px] text-ink-300">
-                    {level.holds}
-                  </td>
-                  <td className="py-3 align-top text-[12.5px] text-ink-400">{level.use}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       {/* ------------------------------------------------------------- parity */}
       <Card className="p-5">
         <SectionTitle
           title="Parity run"
-          hint="Sends each action twice on the enforcement path — dry_run true, then false — and requires the decisions to agree."
+          hint="Sends each action twice — dry_run true, then false — and requires the decisions to agree."
         />
 
         <div className="rounded-lg border border-[color-mix(in_oklab,var(--color-hitl)_35%,transparent)] bg-[color-mix(in_oklab,var(--color-hitl)_7%,transparent)] p-3.5">
@@ -410,30 +339,6 @@ export function DryRunPage() {
           </div>
         </>
       )}
-
-      <Card className="p-5">
-        <SectionTitle title="What a dry run still costs you" />
-        <ul className="space-y-2 text-[13px] leading-relaxed text-ink-300">
-          <li>
-            · <strong className="text-ink-100">Capacity.</strong> A dry-run request is a
-            full evaluation and a full audit write. Shadowing a busy policy consumes the
-            same write units as enforcing it.
-          </li>
-          <li>
-            · <strong className="text-ink-100">
-              Shadow means nothing is being stopped.
-            </strong>{" "}
-            While a bundle is in shadow, an action that would be blocked runs. That is the
-            trade being made deliberately, and it is why the mode is shown at the top of
-            this page rather than buried in the bundle.
-          </li>
-          <li>
-            · <strong className="text-ink-100">Simulation leaves no trace.</strong> The
-            level with no cost also produces no evidence — the chain will not show that
-            anyone checked.
-          </li>
-        </ul>
-      </Card>
     </div>
   );
 }

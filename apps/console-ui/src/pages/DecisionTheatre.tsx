@@ -217,7 +217,7 @@ function Verdict({
         <Card className="p-5">
           <SectionTitle
             title="Rules that fired"
-            hint="Every match, not only the winner. An action tripping four rules is worth seeing even when one dominates."
+            hint="Every match, not only the one that decided the outcome."
           />
           {result.matched_rules.length === 0 ? (
             <p className="text-[13px] text-ink-500">
@@ -259,7 +259,7 @@ function Verdict({
         <Card className="p-5">
           <SectionTitle
             title="Derived facts"
-            hint="What the rules were actually matched against. Rules never see raw arguments, which is why re-phrasing them does not evade policy."
+            hint="What the rules were matched against. Returned by Simulate only."
           />
           {simulated && Object.keys(simulated.derived).length > 0 ? (
             <div className="space-y-2">
@@ -296,9 +296,7 @@ function Verdict({
               </div>
               <p className="mt-2 text-[12.5px] leading-relaxed text-ink-400">
                 An extractor could not resolve these, so the decision failed{" "}
-                <strong className="text-ink-200">closed</strong>. Surfaced rather than
-                hidden: repeated unknowns mean policy is being applied more conservatively
-                than its author intended.
+                <strong className="text-ink-200">closed</strong>.
               </p>
             </div>
           )}
@@ -367,11 +365,8 @@ export function DecisionTheatrePage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Decision Theatre
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Send a tool call directly to the deployed policy engine and read the verdict.
-          The decision path is deterministic and never calls an LLM — the same envelope
-          gets the same answer every time, which is what makes policy testable and what
-          makes it immune to prompt injection.
+        <p className="mt-1.5 text-[13.5px] text-ink-400">
+          Evaluate records to the audit chain. Simulate does not.
         </p>
       </div>
 
@@ -431,7 +426,7 @@ export function DecisionTheatrePage() {
 
             <Field
               label="Arguments (JSON)"
-              hint="Exactly what the model would have produced. Edit freely — try to get a blocked action past the rule."
+              hint="Exactly what the model would have produced."
             >
               <Textarea
                 rows={10}
@@ -444,7 +439,7 @@ export function DecisionTheatrePage() {
               checked={dryRun}
               onChange={setDryRun}
               label="dry_run"
-              hint="The caller promises not to execute regardless of the verdict. The engine still evaluates and still records — flagged, and excluded from enforcement metrics."
+              hint="Still evaluated and recorded, flagged, and excluded from enforcement metrics."
             />
 
             <div className="flex flex-wrap gap-3 pt-1">

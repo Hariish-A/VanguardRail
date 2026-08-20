@@ -41,7 +41,6 @@ import {
   CodeBlock,
   EmptyState,
   ErrorNote,
-  SectionTitle,
   Tabs,
 } from "@/components/ui";
 
@@ -199,15 +198,6 @@ export function ConformancePage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Conformance
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          {ALL_SCENARIOS.length} scenarios from{" "}
-          <span className="font-mono text-ink-300">scenarios/*.yaml</span>, compiled into
-          this page at build time so they cannot drift from the ones CI runs, executed
-          against the live control plane. Every scenario asserts the{" "}
-          <strong className="text-ink-200">rule id</strong> as well as the outcome —
-          asserting only the outcome would keep passing after a rule was deleted, so long
-          as something else happened to stop the same action.
-        </p>
       </div>
 
       <Card className="p-5">
@@ -378,39 +368,6 @@ export function ConformancePage() {
           </div>
         </div>
       )}
-
-      <Card className="p-5">
-        <SectionTitle title="This page is not the gate" />
-        <p className="text-[13px] leading-relaxed text-ink-300">
-          The canonical runner is{" "}
-          <span className="font-mono text-ink-100">guardrail-sim</span>, and it is what
-          blocks a pull request. It validates the scenario DSL far more strictly than this
-          page does, runs offline against{" "}
-          <span className="font-mono">policies/default.yaml</span> as well as live, emits
-          JUnit XML and an HTML evidence report, and runs the whole suite against a plain
-          Docker container to prove the control plane is not Lambda-locked.
-        </p>
-        <p className="mt-3 text-[13px] leading-relaxed text-ink-400">
-          It also contains the test that makes the suite worth having:{" "}
-          <span className="font-mono text-ink-200">
-            test_the_suite_actually_fails_when_policy_regresses
-          </span>{" "}
-          deletes a rule and requires the suite to go red. A conformance suite that cannot
-          fail is a green badge, not a check.
-        </p>
-        <p className="mt-3 text-[12.5px] leading-relaxed text-ink-500">
-          One honest difference: this page runs through{" "}
-          <span className="font-mono">/v1/simulate</span> so that opening it does not put
-          twenty rows of speculation into the tamper-evident log. CI runs against the
-          enforcement path, which additionally exercises authentication, DynamoDB, and the
-          audit write.
-        </p>
-        <CodeBlock
-          className="mt-4"
-          code={`uv run guardrail-sim run scenarios/ --endpoint "$BASE" --api-key "$KEY" \\
-  --junit reports/conformance.xml --html reports/conformance.html`}
-        />
-      </Card>
     </div>
   );
 }

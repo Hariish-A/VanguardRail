@@ -192,18 +192,16 @@ export function ChangeImpactPage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Change Impact
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          Runs the full scenario corpus through the active policy and a candidate, and
-          reports where they disagree. A YAML diff tells you which characters moved; this
-          tells you which <em>actions</em> would be decided differently — and, specifically,
-          which would become permitted.
+        <p className="mt-1.5 text-[13.5px] text-ink-400">
+          Runs the scenario corpus against the active policy and a candidate.
+          Records nothing, activates nothing.
         </p>
       </div>
 
       <Card className="p-5">
         <SectionTitle
           title="Candidate"
-          hint="An unpublished draft, or an already-published version. Neither is activated by running this."
+          hint="An unpublished draft, or a published version. Neither is activated by comparing."
         />
 
         <div className="mb-4 flex flex-wrap gap-2">
@@ -465,31 +463,6 @@ export function ChangeImpactPage() {
           </div>
         </>
       )}
-
-      <Card className="p-5">
-        <SectionTitle title="What this does not tell you" />
-        <ul className="space-y-2 text-[13px] leading-relaxed text-ink-300">
-          <li>
-            · <strong className="text-ink-100">Coverage is the corpus.</strong> Twenty
-            actions covering the problem statement's criteria and the engine's properties.
-            A change affecting a tool no scenario exercises reports as no impact.
-          </li>
-          <li>
-            · <strong className="text-ink-100">Nothing is recorded.</strong> Both sides run
-            through <span className="font-mono">/v1/simulate</span>, so this exploration
-            leaves no trace in the audit chain — deliberate, so speculation does not dilute
-            evidence, but it means the chain will not show that you checked.
-          </li>
-          <li>
-            · <strong className="text-ink-100">A candidate is not activated.</strong>{" "}
-            Comparing is free. Making it real is{" "}
-            <a className="text-brand-400 underline" href="#/policy">
-              publish, then activate
-            </a>
-            , and those are two separate acts on purpose.
-          </li>
-        </ul>
-      </Card>
     </div>
   );
 }

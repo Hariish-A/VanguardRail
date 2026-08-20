@@ -36,7 +36,6 @@ import {
   Field,
   Input,
   KeyValue,
-  SectionTitle,
   Skeleton,
   Tabs,
 } from "@/components/ui";
@@ -199,7 +198,7 @@ function DecisionCard({
             <>
               <Field
                 label="Reason"
-                hint="Recorded in the audit chain. “Who approved this” is only half the question an auditor asks."
+                hint="Recorded in the audit chain."
               >
                 <Input
                   value={reason}
@@ -310,12 +309,6 @@ export function ReviewQueuePage() {
           <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
             Review Queue
           </h1>
-          <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-            Actions paused <em>before</em> execution, waiting on a person. Approving here
-            releases the agent; denying returns a structured refusal it can explain. Every
-            resolution is appended to the audit chain with the reviewer and their reason —
-            an approval that leaves no trace is indistinguishable from no policy at all.
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={queue.reload}>
@@ -390,42 +383,6 @@ export function ReviewQueuePage() {
           </AnimatePresence>
         </div>
       )}
-
-      <Card className="p-5">
-        <SectionTitle title="How a held decision ends" />
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-lg border border-[color-mix(in_oklab,var(--color-allow)_35%,transparent)] bg-ink-900/40 p-4">
-            <div className="font-mono text-[12px] font-semibold text-allow">
-              APPROVED
-            </div>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-400">
-              The waiting agent's next poll sees{" "}
-              <span className="font-mono">allows_execution: true</span> and dispatches.
-            </p>
-          </div>
-          <div className="rounded-lg border border-[color-mix(in_oklab,var(--color-block)_35%,transparent)] bg-ink-900/40 p-4">
-            <div className="font-mono text-[12px] font-semibold text-block">
-              DENIED
-            </div>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-400">
-              The tool never runs. The agent receives the reason and reports it.
-            </p>
-          </div>
-          <div className="rounded-lg border border-ink-700 bg-ink-900/40 p-4">
-            <div className="font-mono text-[12px] font-semibold text-ink-300">EXPIRED</div>
-            <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-400">
-              Nobody answered in time, so <span className="font-mono">on_timeout</span>{" "}
-              applies — <strong className="text-ink-200">deny</strong> by default. Silence
-              must not become consent.
-            </p>
-          </div>
-        </div>
-        <p className="mt-4 text-[12.5px] leading-relaxed text-ink-500">
-          Resolution is a DynamoDB conditional write, so two reviewers clicking at once
-          produce exactly one winner and the loser gets a clean 409 rather than a silently
-          overwritten decision.
-        </p>
-      </Card>
     </div>
   );
 }

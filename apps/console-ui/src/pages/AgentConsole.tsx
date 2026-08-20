@@ -276,12 +276,6 @@ export function AgentConsolePage() {
         <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">
           Agent Console
         </h1>
-        <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-ink-400">
-          A real model picks the tools. The SDK intercepts each dispatch and asks the
-          deployed control plane before anything runs. Nothing below is scripted — run it
-          twice and the model may phrase the arguments differently, and policy will still
-          reach the same verdict, because the decision path is deterministic.
-        </p>
       </div>
 
       <AgentIdentity />
@@ -289,7 +283,6 @@ export function AgentConsolePage() {
       <Card className="p-5">
         <SectionTitle
           title="Give it a task"
-          hint="These presets are chosen so a single run can reach several different outcomes."
         />
 
         <div className="mb-4 flex flex-wrap gap-2">
@@ -387,7 +380,7 @@ export function AgentConsolePage() {
             <section>
               <SectionTitle
                 title="What the agent tried, in order"
-                hint="Each of these was decided before the function was called."
+                hint="Each decided before the function was called."
               />
               {run.tool_calls.length === 0 ? (
                 <EmptyState
@@ -406,7 +399,7 @@ export function AgentConsolePage() {
             <section>
               <SectionTitle
                 title="Side-effect ledger"
-                hint="What the tools actually did. This is what makes “blocked” checkable rather than merely reported — a blocked call must leave nothing here."
+                hint="What the tools actually did."
               />
               {run.side_effects.length === 0 ? (
                 <Card className="border-[color-mix(in_oklab,var(--color-allow)_35%,transparent)] p-5">
@@ -439,7 +432,6 @@ export function AgentConsolePage() {
               <section>
                 <SectionTitle
                   title="What the agent told the user"
-                  hint="A blocked call is returned to the model as a structured refusal naming the rule, so it explains the denial instead of crashing. That is what makes the guardrail usable rather than merely obstructive."
                 />
                 <Card className="p-5">
                   <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-ink-200">
