@@ -123,7 +123,7 @@ export const NAV_GROUPS: NavGroup[] = [
         path: "/mcp",
         label: "MCP Proxy",
         glyph: "⇉",
-        blurb: "Govern a tool server that knows nothing about Guardrail",
+        blurb: "Govern a tool server that knows nothing about Vanguardrail",
       },
       {
         path: "/health",
@@ -169,7 +169,7 @@ export function Logo({ compact = false }: { compact?: boolean }) {
       {!compact && (
         <span className="leading-tight">
           <span className="block text-[15px] font-semibold tracking-tight text-ink-100">
-            Guardrail
+            Vanguardrail
           </span>
           <span className="block text-[10.5px] uppercase tracking-[0.16em] text-ink-500">
             action layer
@@ -360,7 +360,7 @@ export function Shell({
 
       <footer className="border-t border-ink-800/70 px-5 py-6">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-6 gap-y-2 text-[12px] text-ink-500">
-          <span>Guardrail — action-layer governance for AI agents</span>
+          <span>Vanguardrail — action-layer governance for AI agents</span>
           <span className="font-mono">PS-3.1</span>
           <span className="ml-auto font-mono">
             $0.00 AWS spend · always-free tier only

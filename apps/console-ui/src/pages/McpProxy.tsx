@@ -1,5 +1,5 @@
 /**
- * MCP Proxy — governing a tool server that knows nothing about Guardrail.
+ * MCP Proxy — governing a tool server that knows nothing about Vanguardrail.
  *
  * ## Why this page is part explanation and part live run
  *

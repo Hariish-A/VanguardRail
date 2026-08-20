@@ -166,7 +166,7 @@ describe("overview dashboard", () => {
     render(<App />);
 
     expect(
-      await screen.findByText(/read live from the control plane/i),
+      await screen.findByText(/reads live from the control plane/i),
     ).toBeInTheDocument();
   });
 

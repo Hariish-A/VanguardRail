@@ -18,12 +18,19 @@
  * the tiles rather than among them. A number in a grid is scanned; a banner is read.
  */
 
+import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { effectStyle, relativeTime } from "@/lib/format";
 import { useAsync, useSession } from "@/lib/store";
 import type { Effect } from "@/lib/types";
 import { DecisionBadge } from "@/components/DecisionBadge";
-import { GlowCard } from "@/components/effects";
+import {
+  GlowCard,
+  GridField,
+  Meteors,
+  Spotlight,
+  TextGenerate,
+} from "@/components/effects";
 import {
   Badge,
   Button,
@@ -36,6 +43,80 @@ import {
 } from "@/components/ui";
 
 const OUTCOMES: Effect[] = ["block", "require_hitl", "log_and_allow", "allow"];
+
+/**
+ * The one piece of framing the product keeps.
+ *
+ * It says what this is, once, above the fold, to somebody who has just opened the link
+ * and has no idea. Everything that used to follow it — the pipeline walkthrough, the
+ * project statistics, the defect narrative — argued for the design rather than reporting
+ * the system's state, and now lives in a reference document instead.
+ *
+ * Renders with or without a key: a visitor who has not connected yet is precisely who it
+ * is for.
+ */
+function Hero() {
+  return (
+    <section className="relative overflow-hidden rounded-3xl border border-ink-800 bg-ink-900/40 px-6 py-14 sm:px-12 sm:py-16">
+      <GridField />
+      <Spotlight />
+      <Meteors count={12} />
+
+      <div className="relative max-w-4xl">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="mb-6 flex flex-wrap items-center gap-2"
+        >
+          <Badge tone="brand">Problem statement PS-3.1</Badge>
+          <Badge>deployed on AWS · us-east-1</Badge>
+          <Badge tone="good">$0.00 spend</Badge>
+        </motion.div>
+
+        <h1 className="text-[32px] font-semibold leading-[1.1] tracking-tight sm:text-[48px]">
+          <TextGenerate text="Guardrails for what an agent" className="text-ink-100" />{" "}
+          <span className="text-gradient animate-shimmer">does</span>
+          <span className="text-ink-500">,</span>
+          <br />
+          <TextGenerate
+            text="not what the model says."
+            className="text-ink-400"
+            delay={0.55}
+          />
+        </h1>
+
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.1, duration: 0.6 }}
+          className="mt-7 max-w-2xl text-[15px] leading-relaxed text-ink-300"
+        >
+          Every commercial guardrail filters model <em>text</em>. A perfectly clean
+          response can still tell a tool to delete 10,000 rows, email a competitor, or read
+          a confidential path — and today's guardrails pass it straight through. This is the
+          missing layer: every tool call is evaluated against declarative policy{" "}
+          <strong className="text-ink-100">before it executes</strong>, and every decision
+          is written into a hash-chained audit record.
+        </motion.p>
+
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 1.3, duration: 0.5 }}
+          className="mt-9 flex flex-wrap gap-3"
+        >
+          <Button onClick={() => (window.location.hash = "/agent")}>
+            Watch an agent be governed →
+          </Button>
+          <Button variant="outline" onClick={() => (window.location.hash = "/theatre")}>
+            Send a tool call yourself
+          </Button>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
 
 export function OverviewPage() {
   const { session, status, identity } = useSession();
@@ -57,12 +138,15 @@ export function OverviewPage() {
 
   if (!connected) {
     return (
-      <EmptyState
-        icon="◆"
-        title="Not connected"
-        detail="Everything on this page is read live from the control plane, scoped to the tenant on your API key."
-        action={<Button onClick={() => (window.location.hash = "/connect")}>Connect</Button>}
-      />
+      <div className="space-y-7">
+        <Hero />
+        <EmptyState
+          icon="◆"
+          title="Not connected"
+          detail="The dashboard below reads live from the control plane, scoped to the tenant on your API key."
+          action={<Button onClick={() => (window.location.hash = "/connect")}>Connect</Button>}
+        />
+      </div>
     );
   }
 
@@ -86,8 +170,12 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-7">
+      <Hero />
+
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="text-[26px] font-semibold tracking-tight text-ink-100">Overview</h1>
+        <h2 className="text-[22px] font-semibold tracking-tight text-ink-100">
+          Right now
+        </h2>
         <div className="flex items-center gap-3">
           {identity && (
             <span className="font-mono text-[12px] text-ink-500">
